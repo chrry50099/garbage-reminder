@@ -1,6 +1,6 @@
 main
 test-build
-server
+/server
 .env
 data/
 .gocache/
