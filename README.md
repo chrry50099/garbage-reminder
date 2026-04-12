@@ -32,6 +32,8 @@ Home Assistant OS 版本安裝說明請看 `DOCS.md`。
 - 本機 JSON state 去重，避免重啟後重複通知
 - 提供 `/status` 只讀端點，方便 Home Assistant REST sensor 或手動檢查
 
+Home Assistant OS App 版本預設不綁定固定 host port，避免和樹梅派上其他服務撞埠。
+
 ## 獨立容器模式的主要環境變數
 
 請先複製 `.env.example` 為 `.env`。

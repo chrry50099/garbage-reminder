@@ -1,5 +1,5 @@
 name: "Garbage ETA Predictor"
-version: "0.2.0"
+version: "0.2.1"
 slug: "garbage_eta_predictor"
 description: >-
   Collects garbage truck GPS history, predicts arrival time for 有謙家園,
@@ -15,10 +15,9 @@ arch:
   - armhf
   - amd64
 ports:
-  8080/tcp: 8080
+  8080/tcp: null
 ports_description:
   8080/tcp: "Status endpoint"
-watchdog: "http://[HOST]:[PORT:8080]/status"
 panel_icon: "mdi:trash-can-clock"
 stage: experimental
 timeout: 60

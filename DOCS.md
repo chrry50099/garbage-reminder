@@ -41,7 +41,13 @@ Home Assistant API 不需要另外填 URL 或 long-lived token，App 會透過 S
 
 ## 狀態頁
 
-App 會提供 `GET /status`，預設對外埠是 `8080`。
+App 會提供 `GET /status`，但在 Home Assistant OS 版本中，預設不直接對外開放 host port，避免和現有服務撞埠造成啟動失敗。
+
+如果你要從外部直接打 `/status`：
+
+1. 到 App 設定頁把 `8080/tcp` 對外埠打開
+2. 重新啟動 App
+3. 再用 `http://<home-assistant-ip>:<你設定的port>/status`
 
 如果你想把 ETA 顯示到 Home Assistant，可參考 `deploy/home_assistant/rest_status_sensor.yaml`。
 
