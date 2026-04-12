@@ -57,7 +57,7 @@ func TestLoadParsesCollectionDefaults(t *testing.T) {
 	if len(cfg.TargetDays) != 6 {
 		t.Fatalf("unexpected target days length: %d", len(cfg.TargetDays))
 	}
-	if cfg.CheckInterval != time.Minute {
+	if cfg.CheckInterval != 20*time.Second {
 		t.Fatalf("unexpected default check interval: %s", cfg.CheckInterval)
 	}
 	if cfg.CollectionStart != "19:00" || cfg.CollectionEnd != "21:30" {

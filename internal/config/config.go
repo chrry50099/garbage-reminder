@@ -55,7 +55,7 @@ type Config struct {
 func Load() (*Config, error) {
 	supervisorToken := strings.TrimSpace(os.Getenv("SUPERVISOR_TOKEN"))
 
-	checkInterval, err := parseDurationEnv("CHECK_INTERVAL", time.Minute)
+	checkInterval, err := parseDurationEnv("CHECK_INTERVAL", 20*time.Second)
 	if err != nil {
 		return nil, err
 	}

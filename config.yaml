@@ -47,7 +47,7 @@ options:
   lateral_offset_limit_meters: 80
   backtrack_tolerance_meters: 30
   ambiguous_segment_epsilon_meters: 15
-  check_interval: "1m"
+  check_interval: "20s"
   send_test_message_on_start: false
   status_port: 8080
 schema:
