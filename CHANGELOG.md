@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.0
+
+- Add route-progress projection for ETA prediction, using Eupfin route points as a monotonic path axis
+- Reduce crossing / overlap mispredictions by disambiguating with recent progress and movement heading
+- Persist projected progress, segment, and lateral offset in SQLite and auto-migrate existing databases
+- Add fake-data tests for crossings, lateral offset tolerance, route-shape fallback, and historical prediction matching
+
+## 0.4.3
+
+- Improve Home Assistant TTS fallback handling when the preferred engine cannot generate playable audio
+
 ## 0.2.0
 
 - Add Home Assistant OS App packaging

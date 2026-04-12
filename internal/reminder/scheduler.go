@@ -22,6 +22,7 @@ const deliveryStatusSent = "sent"
 
 type eupfinClient interface {
 	GetDistrictByCustID(ctx context.Context, custID int) (*eupfin.DistrictConfig, error)
+	GetAllRouteBasicData(ctx context.Context, custID int) ([]eupfin.Route, error)
 	ResolveTargetStop(ctx context.Context, custID, routeID, pointSeq int, pointName string) (*eupfin.TargetStop, error)
 	GetCarStatusGarbage(ctx context.Context, custID, teamID int) ([]eupfin.CarStatus, error)
 	GetAllRouteStatusData(ctx context.Context, custID int) ([]eupfin.RouteStatus, error)
@@ -45,6 +46,7 @@ type historyStore interface {
 	MarkRunCompleted(runID string, arrivalAt time.Time, arrivalSource string) error
 	PruneBefore(cutoff time.Time) error
 	ListHistoricalSamples(weekday time.Weekday, routeID, pointID int, since time.Time) ([]history.HistoricalSample, int, error)
+	ListRecentRunSamples(runID string, limit int) ([]history.RecentSample, error)
 }
 
 type Service struct {
@@ -58,6 +60,9 @@ type Service struct {
 
 	statusMu sync.RWMutex
 	status   StatusSnapshot
+
+	routeShapeMu sync.RWMutex
+	routeShape   *history.RouteShape
 }
 
 type StatusSnapshot struct {
@@ -266,6 +271,9 @@ func (s *Service) CheckOnce(ctx context.Context) error {
 		APIEstimatedMinutes: live.observation.APIEstimatedMinutes,
 		APIEstimatedText:    live.apiEstimatedText,
 		APIWaitingTime:      live.apiWaitingTime,
+		ProgressMeters:      live.observation.ProgressMeters,
+		SegmentIndex:        live.observation.SegmentIndex,
+		LateralOffsetMeters: live.observation.LateralOffsetMeters,
 		CollectedAt:         now,
 	}
 	if err := s.history.InsertSample(sample); err != nil {
@@ -291,8 +299,10 @@ func (s *Service) CheckOnce(ctx context.Context) error {
 	}
 
 	prediction := history.PredictFromHistory(live.observation, historicalSamples, historicalRuns, history.PredictorConfig{
-		MatchRadiusMeters: s.cfg.MatchRadiusMeters,
-		MinHistoryRuns:    s.cfg.MinHistoryRuns,
+		ProgressWindowMeters:     s.cfg.ProgressWindowMeters,
+		LateralOffsetLimitMeters: s.cfg.LateralOffsetLimitMeters,
+		MinHistoryRuns:           s.cfg.MinHistoryRuns,
+		TargetProgressMeters:     s.currentTargetProgress(),
 	})
 	if prediction == nil {
 		prediction = history.PredictFromFallback(live.observation)
@@ -358,15 +368,34 @@ func (s *Service) refreshTarget(ctx context.Context) (*state.CachedTarget, error
 		return nil, fmt.Errorf("resolve district config: %w", err)
 	}
 
-	target, err := s.client.ResolveTargetStop(
-		ctx,
-		s.cfg.TargetCustID,
-		s.cfg.TargetRouteID,
-		s.cfg.TargetPointSeq,
-		s.cfg.TargetPointName,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("resolve target stop: %w", err)
+	var target *eupfin.TargetStop
+	routes, routesErr := s.client.GetAllRouteBasicData(ctx, s.cfg.TargetCustID)
+	if routesErr == nil {
+		resolved, err := eupfin.FindTargetStop(routes, s.cfg.TargetRouteID, s.cfg.TargetPointSeq, s.cfg.TargetPointName)
+		if err != nil {
+			return nil, fmt.Errorf("resolve target stop from route basic data: %w", err)
+		}
+		target = resolved
+		if route := findRoute(routes, s.cfg.TargetRouteID); route != nil {
+			if shape, err := history.BuildRouteShape(*route, s.cfg.TargetPointSeq); err != nil {
+				log.Printf("Route shape unavailable; historical projection disabled for now: %v", err)
+			} else {
+				s.setRouteShape(shape)
+			}
+		}
+	} else {
+		log.Printf("Route basic data unavailable; keeping previous route shape: %v", routesErr)
+		resolved, err := s.client.ResolveTargetStop(
+			ctx,
+			s.cfg.TargetCustID,
+			s.cfg.TargetRouteID,
+			s.cfg.TargetPointSeq,
+			s.cfg.TargetPointName,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("resolve target stop: %w", err)
+		}
+		target = resolved
 	}
 
 	target.CustID = s.cfg.TargetCustID
@@ -448,8 +477,44 @@ func (s *Service) collectLiveObservation(ctx context.Context, target *state.Cach
 		return nil, fmt.Errorf("fetch live route data failed: gps=%v; status=%v", carsErr, statusesErr)
 	}
 
+	s.projectObservation(&result.observation)
+
 	result.arrivalSource = detectArrival(result.observation, target, s.cfg.ArrivalRadiusMeters)
 	return result, nil
+}
+
+func (s *Service) projectObservation(observation *history.Observation) {
+	if observation == nil || !observation.GPSAvailable {
+		return
+	}
+
+	shape := s.currentRouteShape()
+	if shape == nil {
+		return
+	}
+
+	recent, err := s.history.ListRecentRunSamples(observation.CollectedAt.Format("2006-01-02"), 2)
+	if err != nil {
+		log.Printf("ListRecentRunSamples failed: %v", err)
+		return
+	}
+
+	projection, ok := shape.Project(observation.TruckLat, observation.TruckLng, recent, history.ProjectionConfig{
+		ProgressWindowMeters:          s.cfg.ProgressWindowMeters,
+		LateralOffsetLimitMeters:      s.cfg.LateralOffsetLimitMeters,
+		BacktrackToleranceMeters:      s.cfg.BacktrackToleranceMeters,
+		AmbiguousSegmentEpsilonMeters: s.cfg.AmbiguousSegmentEpsilonMeters,
+	})
+	if !ok {
+		return
+	}
+
+	progress := projection.ProgressMeters
+	segment := projection.SegmentIndex
+	lateralOffset := projection.LateralOffsetMeters
+	observation.ProgressMeters = &progress
+	observation.SegmentIndex = &segment
+	observation.LateralOffsetMeters = &lateralOffset
 }
 
 func (s *Service) dispatchNotifications(
@@ -680,4 +745,35 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func findRoute(routes []eupfin.Route, routeID int) *eupfin.Route {
+	for _, route := range routes {
+		if route.RouteID == routeID {
+			copy := route
+			return &copy
+		}
+	}
+	return nil
+}
+
+func (s *Service) setRouteShape(shape *history.RouteShape) {
+	s.routeShapeMu.Lock()
+	defer s.routeShapeMu.Unlock()
+	s.routeShape = shape
+}
+
+func (s *Service) currentRouteShape() *history.RouteShape {
+	s.routeShapeMu.RLock()
+	defer s.routeShapeMu.RUnlock()
+	return s.routeShape
+}
+
+func (s *Service) currentTargetProgress() *float64 {
+	shape := s.currentRouteShape()
+	if shape == nil {
+		return nil
+	}
+	progress := shape.TargetProgressMeters
+	return &progress
 }

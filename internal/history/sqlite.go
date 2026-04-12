@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -41,16 +42,22 @@ type Sample struct {
 	APIEstimatedMinutes *int
 	APIEstimatedText    string
 	APIWaitingTime      *int
+	ProgressMeters      *float64
+	SegmentIndex        *int
+	LateralOffsetMeters *float64
 	CollectedAt         time.Time
 }
 
 type HistoricalSample struct {
-	RunID       string
-	ServiceDate string
-	TruckLat    float64
-	TruckLng    float64
-	CollectedAt time.Time
-	ArrivalAt   time.Time
+	RunID               string
+	ServiceDate         string
+	TruckLat            float64
+	TruckLng            float64
+	CollectedAt         time.Time
+	ArrivalAt           time.Time
+	ProgressMeters      *float64
+	SegmentIndex        *int
+	LateralOffsetMeters *float64
 }
 
 func NewSQLiteStore(path string) (*SQLiteStore, error) {
@@ -158,8 +165,9 @@ func (s *SQLiteStore) InsertSample(sample Sample) error {
 	_, err = tx.Exec(`
 		INSERT INTO samples (
 			run_id, service_date, weekday, route_id, point_id, truck_lat, truck_lng, gps_available,
-			api_estimated_minutes, api_estimated_text, api_waiting_time, collected_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			api_estimated_minutes, api_estimated_text, api_waiting_time,
+			progress_meters, segment_index, lateral_offset_meters, collected_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		sample.RunID,
 		sample.ServiceDate,
@@ -172,6 +180,9 @@ func (s *SQLiteStore) InsertSample(sample Sample) error {
 		nullableInt(sample.APIEstimatedMinutes),
 		sample.APIEstimatedText,
 		nullableInt(sample.APIWaitingTime),
+		nullableFloat(sample.ProgressMeters),
+		nullableInt(sample.SegmentIndex),
+		nullableFloat(sample.LateralOffsetMeters),
 		sample.CollectedAt.Format(time.RFC3339),
 	)
 	if err != nil {
@@ -229,7 +240,8 @@ func (s *SQLiteStore) PruneBefore(cutoff time.Time) error {
 
 func (s *SQLiteStore) ListHistoricalSamples(weekday time.Weekday, routeID, pointID int, since time.Time) ([]HistoricalSample, int, error) {
 	rows, err := s.db.Query(`
-		SELECT s.run_id, r.service_date, s.truck_lat, s.truck_lng, s.collected_at, r.arrival_at
+		SELECT s.run_id, r.service_date, s.truck_lat, s.truck_lng, s.collected_at, r.arrival_at,
+		       s.progress_meters, s.segment_index, s.lateral_offset_meters
 		FROM samples s
 		JOIN runs r ON r.run_id = s.run_id
 		WHERE s.weekday = ?
@@ -252,6 +264,9 @@ func (s *SQLiteStore) ListHistoricalSamples(weekday time.Weekday, routeID, point
 		var sample HistoricalSample
 		var collectedAt string
 		var arrivalAt string
+		var progress sql.NullFloat64
+		var segment sql.NullInt64
+		var lateral sql.NullFloat64
 		if err := rows.Scan(
 			&sample.RunID,
 			&sample.ServiceDate,
@@ -259,17 +274,35 @@ func (s *SQLiteStore) ListHistoricalSamples(weekday time.Weekday, routeID, point
 			&sample.TruckLng,
 			&collectedAt,
 			&arrivalAt,
+			&progress,
+			&segment,
+			&lateral,
 		); err != nil {
 			return nil, 0, fmt.Errorf("scan historical sample: %w", err)
 		}
 
-		sample.CollectedAt, err = time.Parse(time.RFC3339, collectedAt)
+		parsedCollectedAt, err := time.Parse(time.RFC3339, collectedAt)
 		if err != nil {
 			return nil, 0, fmt.Errorf("parse sample collected_at: %w", err)
 		}
-		sample.ArrivalAt, err = time.Parse(time.RFC3339, arrivalAt)
+		parsedArrivalAt, err := time.Parse(time.RFC3339, arrivalAt)
 		if err != nil {
 			return nil, 0, fmt.Errorf("parse sample arrival_at: %w", err)
+		}
+		sample.CollectedAt = parsedCollectedAt
+		sample.ArrivalAt = parsedArrivalAt
+
+		if progress.Valid {
+			value := progress.Float64
+			sample.ProgressMeters = &value
+		}
+		if segment.Valid {
+			value := int(segment.Int64)
+			sample.SegmentIndex = &value
+		}
+		if lateral.Valid {
+			value := lateral.Float64
+			sample.LateralOffsetMeters = &value
 		}
 
 		runSeen[sample.RunID] = struct{}{}
@@ -281,6 +314,74 @@ func (s *SQLiteStore) ListHistoricalSamples(weekday time.Weekday, routeID, point
 	}
 
 	return samples, len(runSeen), nil
+}
+
+func (s *SQLiteStore) ListRecentRunSamples(runID string, limit int) ([]RecentSample, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+
+	rows, err := s.db.Query(`
+		SELECT truck_lat, truck_lng, progress_meters, segment_index, lateral_offset_meters, collected_at
+		FROM samples
+		WHERE run_id = ?
+		ORDER BY collected_at DESC
+		LIMIT ?
+	`, runID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list recent run samples: %w", err)
+	}
+	defer rows.Close()
+
+	recent := make([]RecentSample, 0, limit)
+	for rows.Next() {
+		var sample RecentSample
+		var progress sql.NullFloat64
+		var segment sql.NullInt64
+		var lateral sql.NullFloat64
+		var collectedAt string
+		if err := rows.Scan(
+			&sample.TruckLat,
+			&sample.TruckLng,
+			&progress,
+			&segment,
+			&lateral,
+			&collectedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan recent run sample: %w", err)
+		}
+
+		parsedCollectedAt, err := time.Parse(time.RFC3339, collectedAt)
+		if err != nil {
+			return nil, fmt.Errorf("parse recent sample collected_at: %w", err)
+		}
+		sample.CollectedAt = parsedCollectedAt
+
+		if progress.Valid {
+			value := progress.Float64
+			sample.ProgressMeters = &value
+		}
+		if segment.Valid {
+			value := int(segment.Int64)
+			sample.SegmentIndex = &value
+		}
+		if lateral.Valid {
+			value := lateral.Float64
+			sample.LateralOffsetMeters = &value
+		}
+
+		recent = append(recent, sample)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate recent run samples: %w", err)
+	}
+
+	for left, right := 0, len(recent)-1; left < right; left, right = left+1, right-1 {
+		recent[left], recent[right] = recent[right], recent[left]
+	}
+
+	return recent, nil
 }
 
 func (s *SQLiteStore) ensureSchema() error {
@@ -313,6 +414,9 @@ CREATE TABLE IF NOT EXISTS samples (
 	api_estimated_minutes INTEGER,
 	api_estimated_text TEXT,
 	api_waiting_time INTEGER,
+	progress_meters REAL,
+	segment_index INTEGER,
+	lateral_offset_meters REAL,
 	collected_at TEXT NOT NULL,
 	FOREIGN KEY(run_id) REFERENCES runs(run_id)
 );
@@ -322,6 +426,52 @@ CREATE INDEX IF NOT EXISTS idx_samples_lookup ON samples (weekday, route_id, poi
 
 	if _, err := s.db.Exec(schema); err != nil {
 		return fmt.Errorf("ensure sqlite schema: %w", err)
+	}
+
+	for _, column := range []struct {
+		name       string
+		definition string
+	}{
+		{name: "progress_meters", definition: "REAL"},
+		{name: "segment_index", definition: "INTEGER"},
+		{name: "lateral_offset_meters", definition: "REAL"},
+	} {
+		if err := s.ensureColumnExists("samples", column.name, column.definition); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (s *SQLiteStore) ensureColumnExists(tableName, columnName, definition string) error {
+	rows, err := s.db.Query(fmt.Sprintf("PRAGMA table_info(%s)", tableName))
+	if err != nil {
+		return fmt.Errorf("inspect table %s schema: %w", tableName, err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var cid int
+		var name string
+		var columnType string
+		var notNull int
+		var defaultValue sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &pk); err != nil {
+			return fmt.Errorf("scan %s schema info: %w", tableName, err)
+		}
+		if strings.EqualFold(name, columnName) {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate %s schema info: %w", tableName, err)
+	}
+
+	statement := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", tableName, columnName, definition)
+	if _, err := s.db.Exec(statement); err != nil {
+		return fmt.Errorf("add column %s.%s: %w", tableName, columnName, err)
 	}
 	return nil
 }
@@ -334,6 +484,13 @@ func boolToInt(value bool) int {
 }
 
 func nullableInt(value *int) any {
+	if value == nil {
+		return nil
+	}
+	return *value
+}
+
+func nullableFloat(value *float64) any {
 	if value == nil {
 		return nil
 	}

@@ -38,9 +38,13 @@ type Config struct {
 	AlertOffsets    []int
 	HistoryWeeks    int
 
-	ArrivalRadiusMeters float64
-	MatchRadiusMeters   float64
-	MinHistoryRuns      int
+	ArrivalRadiusMeters           float64
+	MatchRadiusMeters             float64
+	MinHistoryRuns                int
+	ProgressWindowMeters          float64
+	LateralOffsetLimitMeters      float64
+	BacktrackToleranceMeters      float64
+	AmbiguousSegmentEpsilonMeters float64
 
 	HABaseURL    string
 	HAToken      string
@@ -87,6 +91,22 @@ func Load() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	progressWindowMeters, err := parsePositiveFloatEnv("PROGRESS_WINDOW_METERS", 150)
+	if err != nil {
+		return nil, err
+	}
+	lateralOffsetLimitMeters, err := parsePositiveFloatEnv("LATERAL_OFFSET_LIMIT_METERS", 80)
+	if err != nil {
+		return nil, err
+	}
+	backtrackToleranceMeters, err := parsePositiveFloatEnv("BACKTRACK_TOLERANCE_METERS", 30)
+	if err != nil {
+		return nil, err
+	}
+	ambiguousSegmentEpsilonMeters, err := parsePositiveFloatEnv("AMBIGUOUS_SEGMENT_EPSILON_METERS", 15)
+	if err != nil {
+		return nil, err
+	}
 
 	cfg := &Config{
 		TelegramBotToken: strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN")),
@@ -108,9 +128,13 @@ func Load() (*Config, error) {
 		AlertOffsets:    alertOffsets,
 		HistoryWeeks:    historyWeeks,
 
-		ArrivalRadiusMeters: arrivalRadiusMeters,
-		MatchRadiusMeters:   matchRadiusMeters,
-		MinHistoryRuns:      minHistoryRuns,
+		ArrivalRadiusMeters:           arrivalRadiusMeters,
+		MatchRadiusMeters:             matchRadiusMeters,
+		MinHistoryRuns:                minHistoryRuns,
+		ProgressWindowMeters:          progressWindowMeters,
+		LateralOffsetLimitMeters:      lateralOffsetLimitMeters,
+		BacktrackToleranceMeters:      backtrackToleranceMeters,
+		AmbiguousSegmentEpsilonMeters: ambiguousSegmentEpsilonMeters,
 
 		HABaseURL:    resolveHABaseURL(supervisorToken),
 		HAToken:      firstNonEmpty(os.Getenv("HA_TOKEN"), supervisorToken),
@@ -213,6 +237,18 @@ func (c *Config) Validate() error {
 	}
 	if c.MinHistoryRuns <= 0 {
 		return fmt.Errorf("MIN_HISTORY_RUNS must be greater than 0")
+	}
+	if c.ProgressWindowMeters <= 0 {
+		return fmt.Errorf("PROGRESS_WINDOW_METERS must be greater than 0")
+	}
+	if c.LateralOffsetLimitMeters <= 0 {
+		return fmt.Errorf("LATERAL_OFFSET_LIMIT_METERS must be greater than 0")
+	}
+	if c.BacktrackToleranceMeters <= 0 {
+		return fmt.Errorf("BACKTRACK_TOLERANCE_METERS must be greater than 0")
+	}
+	if c.AmbiguousSegmentEpsilonMeters <= 0 {
+		return fmt.Errorf("AMBIGUOUS_SEGMENT_EPSILON_METERS must be greater than 0")
 	}
 
 	return nil

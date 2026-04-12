@@ -2,6 +2,7 @@ package reminder
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -39,38 +40,20 @@ func TestCheckOnceUsesHistoricalPredictionAndSendsAlert(t *testing.T) {
 	historyStore := newFakeHistoryStore()
 	historyStore.historicalRuns = 3
 	now := time.Date(2026, 4, 13, 20, 22, 0, 0, time.FixedZone("CST", 8*3600))
+	currentProjection := mustProjectBaseRoute(t, 24.745500, 121.013500, nil)
+
 	historyStore.historicalSamples = []history.HistoricalSample{
-		{
-			RunID:       "2026-04-06",
-			ServiceDate: "2026-04-06",
-			TruckLat:    24.74445,
-			TruckLng:    121.01112,
-			CollectedAt: now.AddDate(0, 0, -7),
-			ArrivalAt:   now.AddDate(0, 0, -7).Add(8 * time.Minute),
-		},
-		{
-			RunID:       "2026-03-30",
-			ServiceDate: "2026-03-30",
-			TruckLat:    24.74444,
-			TruckLng:    121.01111,
-			CollectedAt: now.AddDate(0, 0, -14),
-			ArrivalAt:   now.AddDate(0, 0, -14).Add(9 * time.Minute),
-		},
-		{
-			RunID:       "2026-03-23",
-			ServiceDate: "2026-03-23",
-			TruckLat:    24.74446,
-			TruckLng:    121.01110,
-			CollectedAt: now.AddDate(0, 0, -21),
-			ArrivalAt:   now.AddDate(0, 0, -21).Add(8 * time.Minute),
-		},
+		historicalSampleForProgress("2026-04-06", now.AddDate(0, 0, -7), currentProjection.ProgressMeters-4, 6, 8),
+		historicalSampleForProgress("2026-03-30", now.AddDate(0, 0, -14), currentProjection.ProgressMeters+3, 10, 9),
+		historicalSampleForProgress("2026-03-23", now.AddDate(0, 0, -21), currentProjection.ProgressMeters+9, 12, 8),
 	}
 
 	service := NewService(cfg, &fakeEupfinClient{
 		district: baseDistrict(),
 		target:   baseTarget(),
+		routes:   []eupfin.Route{baseRoute()},
 		cars: []eupfin.CarStatus{
-			{RouteID: 461, GISX: 121.011111, GISY: 24.744444},
+			{RouteID: 461, GISX: 121.013500, GISY: 24.745500},
 		},
 	}, alerts, &fakeNotifier{}, store, historyStore)
 	service.now = func() time.Time { return now }
@@ -88,6 +71,9 @@ func TestCheckOnceUsesHistoricalPredictionAndSendsAlert(t *testing.T) {
 	if !store.HasDelivery("2026-04-13|10") {
 		t.Fatal("expected 10-minute delivery record to be stored")
 	}
+	if len(historyStore.samples) != 1 || historyStore.samples[0].ProgressMeters == nil {
+		t.Fatalf("expected inserted sample to include route progress, got %+v", historyStore.samples)
+	}
 }
 
 func TestCheckOnceFallsBackToAPIWhenHistoryUnavailable(t *testing.T) {
@@ -96,6 +82,7 @@ func TestCheckOnceFallsBackToAPIWhenHistoryUnavailable(t *testing.T) {
 	service := NewService(cfg, &fakeEupfinClient{
 		district: baseDistrict(),
 		target:   baseTarget(),
+		routes:   []eupfin.Route{baseRoute()},
 		statuses: []eupfin.RouteStatus{
 			{
 				RouteID: 461,
@@ -125,12 +112,49 @@ func TestCheckOnceFallsBackToAPIWhenHistoryUnavailable(t *testing.T) {
 	}
 }
 
+func TestCheckOnceFallsBackToAPIWhenRouteShapeUnavailable(t *testing.T) {
+	cfg := testConfig()
+	alerts := &fakeNotifier{}
+	service := NewService(cfg, &fakeEupfinClient{
+		district: baseDistrict(),
+		target:   baseTarget(),
+		routeErr: errors.New("route basic data unavailable"),
+		statuses: []eupfin.RouteStatus{
+			{
+				RouteID: 461,
+				Points: []eupfin.RouteStatusPoint{
+					{
+						PointID:       27,
+						EstimatedTime: "20:25",
+						WaitingTime:   3,
+					},
+				},
+			},
+		},
+	}, alerts, &fakeNotifier{}, newFakeStore(), newFakeHistoryStore())
+	service.now = func() time.Time {
+		return time.Date(2026, 4, 13, 20, 22, 0, 0, time.FixedZone("CST", 8*3600))
+	}
+
+	if err := service.CheckOnce(context.Background()); err != nil {
+		t.Fatalf("CheckOnce() returned error: %v", err)
+	}
+
+	if len(alerts.messages) != 2 {
+		t.Fatalf("expected API fallback alerts, got %d", len(alerts.messages))
+	}
+	if !strings.Contains(alerts.messages[0], "api_estimated_time") {
+		t.Fatalf("expected api_estimated_time alert, got %+v", alerts.messages)
+	}
+}
+
 func TestCheckOnceMarksRunCompletedOnArrival(t *testing.T) {
 	cfg := testConfig()
 	historyStore := newFakeHistoryStore()
 	service := NewService(cfg, &fakeEupfinClient{
 		district: baseDistrict(),
 		target:   baseTarget(),
+		routes:   []eupfin.Route{baseRoute()},
 		cars: []eupfin.CarStatus{
 			{RouteID: 461, GISX: 121.020320, GISY: 24.748448},
 		},
@@ -158,6 +182,7 @@ func TestSendStartupTestMessageUsesStartupNotifier(t *testing.T) {
 	service := NewService(cfg, &fakeEupfinClient{
 		district: baseDistrict(),
 		target:   baseTarget(),
+		routes:   []eupfin.Route{baseRoute()},
 	}, &fakeNotifier{}, startup, newFakeStore(), newFakeHistoryStore())
 
 	if err := service.SendStartupTestMessage(context.Background()); err != nil {
@@ -174,12 +199,27 @@ func TestSendStartupTestMessageUsesStartupNotifier(t *testing.T) {
 type fakeEupfinClient struct {
 	district *eupfin.DistrictConfig
 	target   *eupfin.TargetStop
+	routes   []eupfin.Route
+	routeErr error
 	cars     []eupfin.CarStatus
 	statuses []eupfin.RouteStatus
 }
 
 func (f *fakeEupfinClient) GetDistrictByCustID(context.Context, int) (*eupfin.DistrictConfig, error) {
 	return f.district, nil
+}
+
+func (f *fakeEupfinClient) GetAllRouteBasicData(context.Context, int) ([]eupfin.Route, error) {
+	if f.routeErr != nil {
+		return nil, f.routeErr
+	}
+	if len(f.routes) > 0 {
+		return f.routes, nil
+	}
+	if f.target == nil {
+		return nil, nil
+	}
+	return []eupfin.Route{baseRoute()}, nil
 }
 
 func (f *fakeEupfinClient) ResolveTargetStop(context.Context, int, int, int, string) (*eupfin.TargetStop, error) {
@@ -241,6 +281,7 @@ type fakeHistoryStore struct {
 	samples           []history.Sample
 	historicalSamples []history.HistoricalSample
 	historicalRuns    int
+	recentSamples     []history.RecentSample
 }
 
 func newFakeHistoryStore() *fakeHistoryStore {
@@ -296,32 +337,40 @@ func (f *fakeHistoryStore) ListHistoricalSamples(time.Weekday, int, int, time.Ti
 	return f.historicalSamples, f.historicalRuns, nil
 }
 
+func (f *fakeHistoryStore) ListRecentRunSamples(string, int) ([]history.RecentSample, error) {
+	return append([]history.RecentSample(nil), f.recentSamples...), nil
+}
+
 func testConfig() *config.Config {
 	return &config.Config{
-		TelegramBotToken:       "token",
-		TelegramChatID:         "chat",
-		EupfinBaseURL:          "https://example.com",
-		StateFile:              "state.json",
-		DatabaseFile:           "history.db",
-		CheckInterval:          time.Minute,
-		HTTPPort:               "8080",
-		TargetCustID:           5005808,
-		TargetRouteID:          461,
-		TargetPointSeq:         27,
-		TargetPointName:        "有謙家園",
-		TargetDays:             []time.Weekday{time.Monday, time.Tuesday, time.Wednesday, time.Thursday, time.Friday, time.Saturday},
-		CollectionStart:        "19:00",
-		CollectionEnd:          "21:30",
-		AlertOffsets:           []int{10, 3},
-		HistoryWeeks:           8,
-		ArrivalRadiusMeters:    80,
-		MatchRadiusMeters:      250,
-		MinHistoryRuns:         3,
-		HABaseURL:              "http://homeassistant.local:8123",
-		HAToken:                "token",
-		HANotifyMode:           "webhook",
-		HATTSTarget:            "garbage_truck",
-		SendTestMessageOnStart: false,
+		TelegramBotToken:              "token",
+		TelegramChatID:                "chat",
+		EupfinBaseURL:                 "https://example.com",
+		StateFile:                     "state.json",
+		DatabaseFile:                  "history.db",
+		CheckInterval:                 time.Minute,
+		HTTPPort:                      "8080",
+		TargetCustID:                  5005808,
+		TargetRouteID:                 461,
+		TargetPointSeq:                27,
+		TargetPointName:               "有謙家園",
+		TargetDays:                    []time.Weekday{time.Monday, time.Tuesday, time.Wednesday, time.Thursday, time.Friday, time.Saturday},
+		CollectionStart:               "19:00",
+		CollectionEnd:                 "21:30",
+		AlertOffsets:                  []int{10, 3},
+		HistoryWeeks:                  8,
+		ArrivalRadiusMeters:           80,
+		MatchRadiusMeters:             250,
+		MinHistoryRuns:                3,
+		ProgressWindowMeters:          150,
+		LateralOffsetLimitMeters:      80,
+		BacktrackToleranceMeters:      30,
+		AmbiguousSegmentEpsilonMeters: 15,
+		HABaseURL:                     "http://homeassistant.local:8123",
+		HAToken:                       "token",
+		HANotifyMode:                  "webhook",
+		HATTSTarget:                   "garbage_truck",
+		SendTestMessageOnStart:        false,
 	}
 }
 
@@ -341,5 +390,49 @@ func baseTarget() *eupfin.TargetStop {
 		ScheduledTime: "20:30",
 		GISX:          121.02032,
 		GISY:          24.748448,
+	}
+}
+
+func baseRoute() eupfin.Route {
+	return eupfin.Route{
+		RouteID:   461,
+		RouteName: "雙溪線(每周一、二、四、五資源回收)",
+		Points: []eupfin.Point{
+			{PointID: 1, Seq: 1, PointName: "起點", GISX: 121.010000, GISY: 24.740000},
+			{PointID: 10, Seq: 10, PointName: "中途", GISX: 121.011111, GISY: 24.744444},
+			{PointID: 27, Seq: 27, PointName: "有謙家園", GISX: 121.020320, GISY: 24.748448},
+		},
+	}
+}
+
+func mustProjectBaseRoute(t *testing.T, lat, lng float64, recent []history.RecentSample) *history.ProjectionResult {
+	t.Helper()
+
+	shape, err := history.BuildRouteShape(baseRoute(), 27)
+	if err != nil {
+		t.Fatalf("BuildRouteShape() returned error: %v", err)
+	}
+	projection, ok := shape.Project(lat, lng, recent, history.ProjectionConfig{
+		ProgressWindowMeters:          150,
+		LateralOffsetLimitMeters:      80,
+		BacktrackToleranceMeters:      30,
+		AmbiguousSegmentEpsilonMeters: 15,
+	})
+	if !ok {
+		t.Fatal("expected test projection to succeed")
+	}
+	return projection
+}
+
+func historicalSampleForProgress(runID string, collectedAt time.Time, progressValue, lateralValue float64, remainingMinutes int) history.HistoricalSample {
+	progress := progressValue
+	lateral := lateralValue
+	return history.HistoricalSample{
+		RunID:               runID,
+		ServiceDate:         collectedAt.Format("2006-01-02"),
+		CollectedAt:         collectedAt,
+		ArrivalAt:           collectedAt.Add(time.Duration(remainingMinutes) * time.Minute),
+		ProgressMeters:      &progress,
+		LateralOffsetMeters: &lateral,
 	}
 }

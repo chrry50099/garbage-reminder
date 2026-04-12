@@ -66,6 +66,12 @@ func TestLoadParsesCollectionDefaults(t *testing.T) {
 	if cfg.HistoryWeeks != 8 {
 		t.Fatalf("unexpected history weeks: %d", cfg.HistoryWeeks)
 	}
+	if cfg.ProgressWindowMeters != 150 || cfg.LateralOffsetLimitMeters != 80 {
+		t.Fatalf("unexpected projection defaults: progress=%v lateral=%v", cfg.ProgressWindowMeters, cfg.LateralOffsetLimitMeters)
+	}
+	if cfg.BacktrackToleranceMeters != 30 || cfg.AmbiguousSegmentEpsilonMeters != 15 {
+		t.Fatalf("unexpected ambiguity defaults: backtrack=%v epsilon=%v", cfg.BacktrackToleranceMeters, cfg.AmbiguousSegmentEpsilonMeters)
+	}
 	if cfg.SendTestMessageOnStart {
 		t.Fatal("expected startup test message to be disabled by default")
 	}
@@ -121,6 +127,10 @@ func setRequiredEnv(t *testing.T) {
 	t.Setenv("ARRIVAL_RADIUS_METERS", "")
 	t.Setenv("MATCH_RADIUS_METERS", "")
 	t.Setenv("MIN_HISTORY_RUNS", "")
+	t.Setenv("PROGRESS_WINDOW_METERS", "")
+	t.Setenv("LATERAL_OFFSET_LIMIT_METERS", "")
+	t.Setenv("BACKTRACK_TOLERANCE_METERS", "")
+	t.Setenv("AMBIGUOUS_SEGMENT_EPSILON_METERS", "")
 	t.Setenv("TARGET_TIME", "")
 	t.Setenv("REMINDER_MINUTES", "")
 }
@@ -156,6 +166,10 @@ func setRequiredEnvWithoutHA(t *testing.T) {
 	t.Setenv("ARRIVAL_RADIUS_METERS", "")
 	t.Setenv("MATCH_RADIUS_METERS", "")
 	t.Setenv("MIN_HISTORY_RUNS", "")
+	t.Setenv("PROGRESS_WINDOW_METERS", "")
+	t.Setenv("LATERAL_OFFSET_LIMIT_METERS", "")
+	t.Setenv("BACKTRACK_TOLERANCE_METERS", "")
+	t.Setenv("AMBIGUOUS_SEGMENT_EPSILON_METERS", "")
 	t.Setenv("TARGET_TIME", "")
 	t.Setenv("REMINDER_MINUTES", "")
 }

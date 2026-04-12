@@ -4,8 +4,6 @@ import (
 	"math"
 	"sort"
 	"time"
-
-	"telegram-garbage-reminder/internal/geo"
 )
 
 type Observation struct {
@@ -19,6 +17,9 @@ type Observation struct {
 	APIEstimatedMinutes *int
 	APIEstimatedText    string
 	APIWaitingTime      *int
+	ProgressMeters      *float64
+	SegmentIndex        *int
+	LateralOffsetMeters *float64
 }
 
 type Prediction struct {
@@ -31,25 +32,47 @@ type Prediction struct {
 }
 
 type PredictorConfig struct {
-	MatchRadiusMeters float64
-	MinHistoryRuns    int
+	ProgressWindowMeters     float64
+	LateralOffsetLimitMeters float64
+	MinHistoryRuns           int
+	TargetProgressMeters     *float64
 }
 
 type rankedSample struct {
 	remainingMinutes int
 	weight           float64
-	distanceMeters   float64
+	progressDelta    float64
+	lateralOffset    float64
 }
 
 func PredictFromHistory(observation Observation, samples []HistoricalSample, runCount int, cfg PredictorConfig) *Prediction {
-	if !observation.GPSAvailable || runCount < cfg.MinHistoryRuns {
+	if !observation.GPSAvailable || observation.ProgressMeters == nil || observation.LateralOffsetMeters == nil {
+		return nil
+	}
+	if runCount < cfg.MinHistoryRuns || cfg.TargetProgressMeters == nil {
+		return nil
+	}
+	if *observation.LateralOffsetMeters > cfg.LateralOffsetLimitMeters {
+		return nil
+	}
+	if *observation.ProgressMeters >= *cfg.TargetProgressMeters {
 		return nil
 	}
 
 	matches := make([]rankedSample, 0, len(samples))
 	for _, sample := range samples {
-		distanceMeters := geo.CalculateDistance(observation.TruckLat, observation.TruckLng, sample.TruckLat, sample.TruckLng)
-		if distanceMeters > cfg.MatchRadiusMeters {
+		if sample.ProgressMeters == nil || sample.LateralOffsetMeters == nil {
+			continue
+		}
+		if *sample.LateralOffsetMeters > cfg.LateralOffsetLimitMeters {
+			continue
+		}
+		if *sample.ProgressMeters >= *cfg.TargetProgressMeters {
+			continue
+		}
+
+		progressDelta := math.Abs(*observation.ProgressMeters - *sample.ProgressMeters)
+		if progressDelta > cfg.ProgressWindowMeters {
 			continue
 		}
 
@@ -63,12 +86,14 @@ func PredictFromHistory(observation Observation, samples []HistoricalSample, run
 			daysAgo = 0
 		}
 
-		distanceWeight := 1 / (1 + distanceMeters/25)
+		progressWeight := 1 / (1 + progressDelta/20)
+		offsetWeight := 1 / (1 + *sample.LateralOffsetMeters/20)
 		recencyWeight := 1 / (1 + daysAgo/7)
 		matches = append(matches, rankedSample{
 			remainingMinutes: remaining,
-			weight:           distanceWeight * recencyWeight,
-			distanceMeters:   distanceMeters,
+			weight:           progressWeight * offsetWeight * recencyWeight,
+			progressDelta:    progressDelta,
+			lateralOffset:    *sample.LateralOffsetMeters,
 		})
 	}
 
@@ -77,7 +102,10 @@ func PredictFromHistory(observation Observation, samples []HistoricalSample, run
 	}
 
 	sort.Slice(matches, func(i, j int) bool {
-		return matches[i].distanceMeters < matches[j].distanceMeters
+		if matches[i].progressDelta == matches[j].progressDelta {
+			return matches[i].lateralOffset < matches[j].lateralOffset
+		}
+		return matches[i].progressDelta < matches[j].progressDelta
 	})
 	if len(matches) > 5 {
 		matches = matches[:5]
@@ -87,6 +115,8 @@ func PredictFromHistory(observation Observation, samples []HistoricalSample, run
 	confidence := "medium"
 	if len(matches) >= 4 {
 		confidence = "high"
+	} else if len(matches) == 1 {
+		confidence = "low"
 	}
 
 	return &Prediction{

@@ -59,6 +59,16 @@ func TestSendTestBroadcastGeneratesMediaAndPlaysIt(t *testing.T) {
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/api/states":
+			_ = json.NewEncoder(w).Encode([]map[string]interface{}{
+				{
+					"entity_id": "tts.google_en_com",
+					"state":     "unknown",
+					"attributes": map[string]interface{}{
+						"friendly_name": "Google Translate",
+					},
+				},
+			})
 		case "/api/tts_get_url":
 			_ = json.NewEncoder(w).Encode(map[string]string{
 				"url":  server.URL + "/api/tts_proxy/test.mp3",
@@ -106,6 +116,16 @@ func TestSendTestBroadcastOmitsLanguageForGeminiTTS(t *testing.T) {
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/api/states":
+			_ = json.NewEncoder(w).Encode([]map[string]interface{}{
+				{
+					"entity_id": "tts.google_ai_tts",
+					"state":     "unknown",
+					"attributes": map[string]interface{}{
+						"friendly_name": "Google AI TTS",
+					},
+				},
+			})
 		case "/api/tts_get_url":
 			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 				t.Fatalf("decode request: %v", err)
