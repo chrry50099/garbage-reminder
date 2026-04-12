@@ -45,6 +45,19 @@ type BroadcastRequest struct {
 	Voice           string   `json:"voice,omitempty"`
 }
 
+type ttsGetURLRequest struct {
+	EngineID string                 `json:"engine_id"`
+	Message  string                 `json:"message"`
+	Cache    bool                   `json:"cache"`
+	Language string                 `json:"language,omitempty"`
+	Options  map[string]interface{} `json:"options,omitempty"`
+}
+
+type ttsGetURLResponse struct {
+	URL  string `json:"url"`
+	Path string `json:"path"`
+}
+
 type haEntityState struct {
 	EntityID   string                 `json:"entity_id"`
 	State      string                 `json:"state"`
@@ -177,6 +190,11 @@ func (h *HomeAssistant) SendTestBroadcast(ctx context.Context, request Broadcast
 		return fmt.Errorf("no TTS entity available")
 	}
 
+	mediaURL, usedTTSEntityID, err := h.resolveBroadcastMediaURL(ctx, request, ttsEntityID)
+	if err != nil {
+		return err
+	}
+
 	for _, targetEntityID := range request.TargetEntityIDs {
 		targetEntityID = strings.TrimSpace(targetEntityID)
 		if targetEntityID == "" {
@@ -184,39 +202,126 @@ func (h *HomeAssistant) SendTestBroadcast(ctx context.Context, request Broadcast
 		}
 
 		payload := map[string]interface{}{
-			"entity_id":              ttsEntityID,
-			"media_player_entity_id": targetEntityID,
-			"message":                message,
-			"cache":                  true,
-		}
-		if language := strings.TrimSpace(request.Language); language != "" && supportsExplicitLanguage(ttsEntityID) {
-			payload["language"] = language
-		}
-		if voice := resolveVoiceOption(ttsEntityID, request.Voice); voice != "" {
-			payload["options"] = map[string]interface{}{
-				"voice": voice,
-			}
+			"entity_id":         targetEntityID,
+			"media_content_id":  mediaURL,
+			"media_content_type": "music",
 		}
 
 		body, err := json.Marshal(payload)
 		if err != nil {
-			return fmt.Errorf("marshal tts payload: %w", err)
+			return fmt.Errorf("marshal media player payload: %w", err)
 		}
 
-		endpoint := fmt.Sprintf("%s/api/services/tts/speak", h.baseURL)
+		endpoint := fmt.Sprintf("%s/api/services/media_player/play_media", h.baseURL)
 		resp, err := h.do(ctx, http.MethodPost, endpoint, body)
 		if err != nil {
-			return fmt.Errorf("send tts speak request: %w", err)
+			return fmt.Errorf("send play_media request: %w", err)
 		}
 
 		respBody, readErr := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		if readErr != nil {
-			return fmt.Errorf("read tts speak response: %w", readErr)
+			return fmt.Errorf("read play_media response: %w", readErr)
 		}
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			return fmt.Errorf("tts speak failed for %s with status %d: %s", targetEntityID, resp.StatusCode, strings.TrimSpace(string(respBody)))
+			return fmt.Errorf("play_media failed for %s using %s with status %d: %s", targetEntityID, usedTTSEntityID, resp.StatusCode, strings.TrimSpace(string(respBody)))
 		}
+	}
+
+	return nil
+}
+
+func (h *HomeAssistant) resolveBroadcastMediaURL(ctx context.Context, request BroadcastRequest, primaryTTSEntityID string) (string, string, error) {
+	candidates := []string{primaryTTSEntityID}
+	options, err := h.ListBroadcastOptions(ctx)
+	if err == nil {
+		for _, option := range options.TTSEntities {
+			if option.EntityID == "" || option.EntityID == primaryTTSEntityID {
+				continue
+			}
+			candidates = append(candidates, option.EntityID)
+		}
+	}
+
+	var failures []string
+	for _, ttsEntityID := range candidates {
+		mediaURL, err := h.generateTTSMediaURL(ctx, ttsEntityID, request)
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("%s generate: %v", ttsEntityID, err))
+			continue
+		}
+		if err := h.validateMediaURL(ctx, mediaURL); err != nil {
+			failures = append(failures, fmt.Sprintf("%s proxy: %v", ttsEntityID, err))
+			continue
+		}
+		return mediaURL, ttsEntityID, nil
+	}
+
+	if len(failures) == 0 {
+		return "", "", fmt.Errorf("no usable TTS engine found")
+	}
+	return "", "", fmt.Errorf("no usable TTS engine found: %s", strings.Join(failures, "; "))
+}
+
+func (h *HomeAssistant) generateTTSMediaURL(ctx context.Context, ttsEntityID string, request BroadcastRequest) (string, error) {
+	payload := ttsGetURLRequest{
+		EngineID: ttsEntityID,
+		Message:  strings.TrimSpace(request.Message),
+		Cache:    true,
+	}
+	if language := strings.TrimSpace(request.Language); language != "" && supportsExplicitLanguage(ttsEntityID) {
+		payload.Language = language
+	}
+	if voice := resolveVoiceOption(ttsEntityID, request.Voice); voice != "" {
+		payload.Options = map[string]interface{}{
+			"voice": voice,
+		}
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("marshal tts_get_url payload: %w", err)
+	}
+
+	endpoint := fmt.Sprintf("%s/api/tts_get_url", h.baseURL)
+	resp, err := h.do(ctx, http.MethodPost, endpoint, body)
+	if err != nil {
+		return "", fmt.Errorf("request tts_get_url: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("read tts_get_url response: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("tts_get_url returned status %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
+
+	var payloadResp ttsGetURLResponse
+	if err := json.Unmarshal(respBody, &payloadResp); err != nil {
+		return "", fmt.Errorf("decode tts_get_url response: %w", err)
+	}
+	if strings.TrimSpace(payloadResp.URL) == "" {
+		return "", fmt.Errorf("tts_get_url returned empty url")
+	}
+	return strings.TrimSpace(payloadResp.URL), nil
+}
+
+func (h *HomeAssistant) validateMediaURL(ctx context.Context, mediaURL string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, mediaURL, nil)
+	if err != nil {
+		return fmt.Errorf("create media validation request: %w", err)
+	}
+
+	resp, err := h.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("fetch generated audio: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("generated audio returned status %d", resp.StatusCode)
 	}
 
 	return nil
