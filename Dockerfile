@@ -2,7 +2,7 @@ ARG BUILD_FROM=ghcr.io/home-assistant/base:latest
 FROM golang:1.24-alpine AS builder
 
 ARG TARGETOS=linux
-ARG TARGETARCH=amd64
+ARG TARGETARCH
 ARG BUILD_ARCH
 
 RUN apk add --no-cache ca-certificates

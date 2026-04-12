@@ -10,3 +10,7 @@
 
 - Avoid hard-coded host port conflicts in Home Assistant OS
 - Make app startup retry instead of exiting on initial validation failure
+
+## 0.2.2
+
+- Fix Home Assistant OS builds producing the wrong CPU architecture binary
