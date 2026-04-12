@@ -1,0 +1,29 @@
+services:
+  homeassistant:
+    container_name: homeassistant
+    image: ghcr.io/home-assistant/home-assistant:stable
+    restart: unless-stopped
+    privileged: true
+    network_mode: host
+    environment:
+      TZ: Asia/Taipei
+    volumes:
+      - ./ha-config:/config
+      - /etc/localtime:/etc/localtime:ro
+      - /run/dbus:/run/dbus:ro
+
+  garbage-reminder:
+    container_name: garbage-reminder
+    build:
+      context: ..
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - ../.env
+    environment:
+      TZ: Asia/Taipei
+    depends_on:
+      - homeassistant
+    volumes:
+      - ../data:/app/data
+      - /etc/localtime:/etc/localtime:ro

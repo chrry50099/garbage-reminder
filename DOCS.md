@@ -1,0 +1,58 @@
+# Garbage ETA Predictor
+
+這個 Home Assistant App 會在每週一到六晚上收集雙溪線垃圾車的 GPS 與站點狀態，根據歷史資料預測抵達 `有謙家園` 的時間，並在接近時同步發送：
+
+- Telegram 訊息
+- Home Assistant TTS 廣播，例如 HomePod Mini
+
+## 安裝
+
+1. 在 Home Assistant `設定 > 系統 > Apps > App Store`
+2. 右上角選單加入這個 GitHub repository
+3. 安裝 `Garbage ETA Predictor`
+4. 在 App 設定頁填入必要參數後啟動
+
+## 必填設定
+
+- `telegram_bot_token`
+- `telegram_chat_id`
+- `ha_notify_mode`
+- `ha_tts_target`
+
+Home Assistant API 不需要另外填 URL 或 long-lived token，App 會透過 Supervisor 內部代理直接和 HA 溝通。
+
+## Home Assistant 端要先準備什麼
+
+你仍然需要在 HA 內準備好「收到通知後怎麼播報」的流程。
+
+推薦先用 `webhook` 模式：
+
+- `ha_notify_mode`: `webhook`
+- `ha_tts_target`: `garbage_truck_eta`
+
+然後把 `deploy/home_assistant/automation_webhook.yaml` 的內容改成你的實際 `tts.*` 與 `media_player.*` entity 後匯入 HA。
+
+如果你偏好用 script service call，也可以改成：
+
+- `ha_notify_mode`: `service_call`
+- `ha_tts_target`: `script.homepod_broadcast`
+
+並搭配 `deploy/home_assistant/script_service_call.yaml`。
+
+## 狀態頁
+
+App 會提供 `GET /status`，預設對外埠是 `8080`。
+
+如果你想把 ETA 顯示到 Home Assistant，可參考 `deploy/home_assistant/rest_status_sensor.yaml`。
+
+## 預設追蹤目標
+
+- 客戶代號：`5005808`
+- 路線：`雙溪線`
+- 站點順序：`27`
+- 站點名稱：`有謙家園`
+
+## 備註
+
+- 第一次安裝後，系統需要先累積 1-2 週資料，歷史預測才會越來越穩定。
+- 如果同 weekday 的歷史樣本不足，系統會退回使用 Eupfin API 的估計時間，不會硬做低品質預測。

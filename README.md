@@ -7,6 +7,21 @@ Home Assistant / Telegram 垃圾車動態預測服務
 - Telegram 訊息
 - Home Assistant 內的 HomePod Mini TTS 廣播
 
+## 推薦安裝方式
+
+如果你已經是 **Home Assistant OS**，現在可以直接把這個 repo 當成 **Home Assistant App repository** 使用。
+
+關鍵檔案：
+
+- `repository.yaml`
+- `config.yaml`
+- `run.sh`
+- `DOCS.md`
+
+Home Assistant OS 版本安裝說明請看 `DOCS.md`。
+
+如果你不是用 HA OS，也可以繼續用原本的獨立容器方式部署。
+
 ## 功能
 
 - 每分鐘收集雙溪線車輛 GPS 與目標站點狀態
@@ -17,7 +32,7 @@ Home Assistant / Telegram 垃圾車動態預測服務
 - 本機 JSON state 去重，避免重啟後重複通知
 - 提供 `/status` 只讀端點，方便 Home Assistant REST sensor 或手動檢查
 
-## 主要環境變數
+## 獨立容器模式的主要環境變數
 
 請先複製 `.env.example` 為 `.env`。
 
@@ -58,7 +73,7 @@ PORT=8080
 - `webhook`: 呼叫 `POST /api/webhook/<HA_TTS_TARGET>`
 - `service_call`: 呼叫 `POST /api/services/<domain>/<service>`，此時 `HA_TTS_TARGET` 要填 `domain.service`
 
-## 執行方式
+## 獨立容器模式執行方式
 
 本機直接執行：
 
@@ -85,7 +100,10 @@ go run cmd/server/main.go
 
 ## Docker / Raspberry Pi
 
-Dockerfile 已改成使用 `TARGETOS` / `TARGETARCH` build args，可用於 Raspberry Pi 的 `linux/arm64` 映像建置。
+Dockerfile 現在同時支援：
+
+- Home Assistant OS App 本機建置
+- 一般 Docker / Raspberry Pi 獨立容器建置
 
 範例：
 

@@ -24,6 +24,25 @@ func TestLoadRequiresTelegramHAAndTargetSettings(t *testing.T) {
 	}
 }
 
+func TestLoadUsesSupervisorDefaultsWhenAvailable(t *testing.T) {
+	t.Setenv("SUPERVISOR_TOKEN", "supervisor-token")
+	t.Setenv("HA_BASE_URL", "")
+	t.Setenv("HA_TOKEN", "")
+	setRequiredEnvWithoutHA(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+
+	if cfg.HABaseURL != "http://supervisor/core" {
+		t.Fatalf("unexpected HA base URL: %s", cfg.HABaseURL)
+	}
+	if cfg.HAToken != "supervisor-token" {
+		t.Fatalf("unexpected HA token: %s", cfg.HAToken)
+	}
+}
+
 func TestLoadParsesCollectionDefaults(t *testing.T) {
 	setRequiredEnv(t)
 
@@ -81,6 +100,43 @@ func setRequiredEnv(t *testing.T) {
 		"ALERT_OFFSETS":      "10,3",
 		"HA_BASE_URL":        "http://homeassistant.local:8123",
 		"HA_TOKEN":           "token",
+		"HA_NOTIFY_MODE":     "webhook",
+		"HA_TTS_TARGET":      "garbage_truck",
+	}
+
+	for key, value := range env {
+		t.Setenv(key, value)
+	}
+
+	t.Setenv("SUPERVISOR_TOKEN", "")
+
+	t.Setenv("CHECK_INTERVAL", "")
+	t.Setenv("SEND_TEST_MESSAGE_ON_START", "")
+	t.Setenv("EUPFIN_BASE_URL", "")
+	t.Setenv("STATE_FILE", "")
+	t.Setenv("DATABASE_FILE", "")
+	t.Setenv("COLLECTION_START", "")
+	t.Setenv("COLLECTION_END", "")
+	t.Setenv("HISTORY_WEEKS", "")
+	t.Setenv("ARRIVAL_RADIUS_METERS", "")
+	t.Setenv("MATCH_RADIUS_METERS", "")
+	t.Setenv("MIN_HISTORY_RUNS", "")
+	t.Setenv("TARGET_TIME", "")
+	t.Setenv("REMINDER_MINUTES", "")
+}
+
+func setRequiredEnvWithoutHA(t *testing.T) {
+	t.Helper()
+
+	env := map[string]string{
+		"TELEGRAM_BOT_TOKEN": "token",
+		"TELEGRAM_CHAT_ID":   "chat-id",
+		"TARGET_CUST_ID":     "5005808",
+		"TARGET_ROUTE_ID":    "461",
+		"TARGET_POINT_SEQ":   "27",
+		"TARGET_POINT_NAME":  "有謙家園",
+		"TARGET_DAYS":        "MON,TUE,WED,THU,FRI,SAT",
+		"ALERT_OFFSETS":      "10,3",
 		"HA_NOTIFY_MODE":     "webhook",
 		"HA_TTS_TARGET":      "garbage_truck",
 	}

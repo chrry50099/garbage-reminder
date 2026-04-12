@@ -1,0 +1,64 @@
+name: "Garbage ETA Predictor"
+version: "0.2.0"
+slug: "garbage_eta_predictor"
+description: >-
+  Collects garbage truck GPS history, predicts arrival time for 有謙家園,
+  and notifies both Telegram and Home Assistant / HomePod Mini.
+url: "https://github.com/chrry50099/garbage-reminder"
+startup: application
+boot: auto
+init: false
+homeassistant_api: true
+arch:
+  - aarch64
+  - armv7
+  - armhf
+  - amd64
+ports:
+  8080/tcp: 8080
+ports_description:
+  8080/tcp: "Status endpoint"
+watchdog: "http://[HOST]:[PORT:8080]/status"
+panel_icon: "mdi:trash-can-clock"
+stage: experimental
+options:
+  telegram_bot_token: ""
+  telegram_chat_id: ""
+  ha_notify_mode: "webhook"
+  ha_tts_target: "garbage_truck_eta"
+  target_cust_id: 5005808
+  target_route_id: 461
+  target_point_seq: 27
+  target_point_name: "有謙家園"
+  target_days: "MON,TUE,WED,THU,FRI,SAT"
+  alert_offsets: "10,3"
+  collection_start: "19:00"
+  collection_end: "21:30"
+  history_weeks: 8
+  arrival_radius_meters: 80
+  match_radius_meters: 250
+  min_history_runs: 3
+  check_interval: "1m"
+  send_test_message_on_start: false
+  status_port: 8080
+schema:
+  telegram_bot_token: password
+  telegram_chat_id: str
+  ha_notify_mode: str
+  ha_tts_target: str
+  target_cust_id: int
+  target_route_id: int
+  target_point_seq: int
+  target_point_name: str
+  target_time: str?
+  target_days: str
+  alert_offsets: str
+  collection_start: str
+  collection_end: str
+  history_weeks: int
+  arrival_radius_meters: int
+  match_radius_meters: int
+  min_history_runs: int
+  check_interval: str
+  send_test_message_on_start: bool
+  status_port: port

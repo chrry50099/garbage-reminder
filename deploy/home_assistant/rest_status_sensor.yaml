@@ -1,0 +1,27 @@
+rest:
+  - resource: http://127.0.0.1:8080/status
+    scan_interval: 30
+    sensor:
+      - name: Garbage ETA Remaining
+        unique_id: garbage_eta_remaining
+        unit_of_measurement: min
+        value_template: >-
+          {% if value_json.prediction is defined and value_json.prediction %}
+            {{ value_json.prediction.remaining_minutes }}
+          {% else %}
+            unknown
+          {% endif %}
+        json_attributes:
+          - active
+          - service_date
+          - weekday
+          - collection_window
+          - run_status
+          - gps_available
+          - truck_lat
+          - truck_lng
+          - target_lat
+          - target_lng
+          - api_estimated_text
+          - notified_offsets
+          - message

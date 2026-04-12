@@ -49,6 +49,8 @@ type Config struct {
 }
 
 func Load() (*Config, error) {
+	supervisorToken := strings.TrimSpace(os.Getenv("SUPERVISOR_TOKEN"))
+
 	checkInterval, err := parseDurationEnv("CHECK_INTERVAL", time.Minute)
 	if err != nil {
 		return nil, err
@@ -110,8 +112,8 @@ func Load() (*Config, error) {
 		MatchRadiusMeters:   matchRadiusMeters,
 		MinHistoryRuns:      minHistoryRuns,
 
-		HABaseURL:    strings.TrimSpace(os.Getenv("HA_BASE_URL")),
-		HAToken:      strings.TrimSpace(os.Getenv("HA_TOKEN")),
+		HABaseURL:    resolveHABaseURL(supervisorToken),
+		HAToken:      firstNonEmpty(os.Getenv("HA_TOKEN"), supervisorToken),
 		HANotifyMode: strings.TrimSpace(os.Getenv("HA_NOTIFY_MODE")),
 		HATTSTarget:  strings.TrimSpace(os.Getenv("HA_TTS_TARGET")),
 	}
@@ -234,6 +236,16 @@ func firstNonEmpty(values ...string) string {
 		if trimmed != "" {
 			return trimmed
 		}
+	}
+	return ""
+}
+
+func resolveHABaseURL(supervisorToken string) string {
+	if value := strings.TrimSpace(os.Getenv("HA_BASE_URL")); value != "" {
+		return value
+	}
+	if strings.TrimSpace(supervisorToken) != "" {
+		return "http://supervisor/core"
 	}
 	return ""
 }

@@ -1,0 +1,20 @@
+script:
+  homepod_broadcast:
+    alias: HomePod Broadcast
+    description: Receives Home Assistant service calls from garbage-reminder.
+    fields:
+      message:
+        description: Message to speak on the HomePod Mini.
+        example: 垃圾車快到了
+        required: true
+        selector:
+          text:
+    sequence:
+      - action: tts.speak
+        target:
+          entity_id: tts.google_translate_en_com
+        data:
+          media_player_entity_id: media_player.replace_with_your_homepod
+          language: zh-TW
+          message: "{{ message }}"
+    mode: queued

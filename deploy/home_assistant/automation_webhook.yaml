@@ -1,0 +1,18 @@
+automation:
+  - alias: "Garbage Truck HomePod Broadcast"
+    id: garbage_truck_homepod_broadcast
+    triggers:
+      - trigger: webhook
+        webhook_id: garbage_truck_eta
+        allowed_methods:
+          - POST
+        local_only: true
+    actions:
+      - action: tts.speak
+        target:
+          entity_id: tts.google_translate_en_com
+        data:
+          media_player_entity_id: media_player.replace_with_your_homepod
+          language: zh-TW
+          message: "{{ trigger.json.message | default('垃圾車快到了') }}"
+    mode: queued
