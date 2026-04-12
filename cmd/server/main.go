@@ -45,7 +45,7 @@ func main() {
 	alertNotifier := notifier.NewMultiSender(telegramNotifier, haNotifier)
 	service := reminder.NewService(cfg, eupfinClient, alertNotifier, telegramNotifier, localState, historyStore)
 
-	statusServer := startStatusServer(cfg.HTTPPort, service)
+	statusServer := startStatusServer(cfg.HTTPPort, service, haNotifier)
 	defer shutdownStatusServer(statusServer)
 
 	if err := service.Initialize(ctx); err != nil {
@@ -83,10 +83,12 @@ func waitForShutdown(cancel context.CancelFunc) {
 	log.Println("Reminder service stopped")
 }
 
-func startStatusServer(port string, service *reminder.Service) *http.Server {
+func startStatusServer(port string, service *reminder.Service, haControl *notifier.HomeAssistant) *http.Server {
 	mux := http.NewServeMux()
 	mux.Handle("/", reminder.NewDashboardHandler())
 	mux.Handle("/status", reminder.NewStatusHandler(service))
+	mux.Handle("/api/broadcast/options", reminder.NewBroadcastOptionsHandler(haControl))
+	mux.Handle("/api/broadcast/test", reminder.NewBroadcastTestHandler(haControl))
 
 	server := &http.Server{
 		Addr:    ":" + port,

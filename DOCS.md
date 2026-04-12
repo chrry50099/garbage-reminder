@@ -12,7 +12,7 @@
 3. 安裝 `Garbage ETA Predictor`
 4. 在 App 設定頁填入必要參數後啟動
 
-啟動成功後，Home Assistant 側邊欄會出現 `Garbage ETA`，可直接打開查看目前 ETA、GPS、通知狀態與原始 `/status`。
+啟動成功後，Home Assistant 側邊欄會出現 `Garbage ETA`，可直接打開查看目前 ETA、GPS、通知狀態與原始 `/status`，也可在頁面裡直接發送 HomePod Mini 測試播報。
 
 ## 必填設定
 
@@ -47,6 +47,13 @@ App 會提供兩種狀態查看方式：
 
 - Home Assistant 側邊欄的 `Garbage ETA` Ingress UI
 - `GET /status` JSON API
+
+側邊欄 UI 內建測試播報面板，可：
+
+- 輸入你想播報的文字
+- 勾選 1 台或多台 HomePod Mini / media_player
+- 選擇 HA 內可用的 TTS entity
+- 直接送出測試廣播
 
 Home Assistant OS 版本預設不直接對外開放 host port，避免和現有服務撞埠造成啟動失敗。
 

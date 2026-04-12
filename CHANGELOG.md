@@ -19,3 +19,9 @@
 
 - Add a built-in Home Assistant Ingress UI and sidebar entry
 - Show ETA, GPS, notification status, and raw `/status` JSON in the App page
+
+## 0.4.0
+
+- Add a HomePod Mini test broadcast panel to the App UI
+- Let the App discover media players and TTS entities from Home Assistant
+- Add backend endpoints for test message sending from the sidebar page

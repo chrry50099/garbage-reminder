@@ -22,6 +22,7 @@ var dashboardTemplate = template.Must(template.New("dashboard").Parse(`<!DOCTYPE
       --text: #f5f9f7;
       --muted: #b8c7c1;
       --danger: #ff8e8e;
+      --success: #9ef3b5;
       --shadow: 0 24px 60px rgba(0, 0, 0, 0.25);
       --radius: 24px;
       --font: "IBM Plex Sans", "Noto Sans TC", "Segoe UI", sans-serif;
@@ -119,11 +120,6 @@ var dashboardTemplate = template.Must(template.New("dashboard").Parse(`<!DOCTYPE
       font-size: 0.92rem;
     }
 
-    .badge strong,
-    .meta-pill strong {
-      font-weight: 650;
-    }
-
     .badge.active {
       background: rgba(142, 240, 208, 0.14);
       color: var(--accent);
@@ -166,6 +162,10 @@ var dashboardTemplate = template.Must(template.New("dashboard").Parse(`<!DOCTYPE
 
     .wide-panel {
       grid-column: span 6;
+    }
+
+    .full-panel {
+      grid-column: span 12;
     }
 
     .stats {
@@ -212,6 +212,16 @@ var dashboardTemplate = template.Must(template.New("dashboard").Parse(`<!DOCTYPE
       line-height: 1.5;
     }
 
+    .message.success {
+      color: var(--success);
+      background: rgba(158, 243, 181, 0.08);
+    }
+
+    .message.error {
+      color: var(--danger);
+      background: rgba(255, 142, 142, 0.08);
+    }
+
     dl {
       margin: 0;
       display: grid;
@@ -251,14 +261,111 @@ var dashboardTemplate = template.Must(template.New("dashboard").Parse(`<!DOCTYPE
       color: #d8f2e9;
     }
 
-    .error {
-      color: var(--danger);
+    .form-grid {
+      display: grid;
+      grid-template-columns: repeat(12, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .field {
+      grid-column: span 12;
+      display: grid;
+      gap: 8px;
+    }
+
+    .field.half {
+      grid-column: span 6;
+    }
+
+    label {
+      font-size: 0.92rem;
+      color: var(--muted);
+    }
+
+    textarea,
+    select,
+    input {
+      width: 100%;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 16px;
+      background: rgba(0, 0, 0, 0.22);
+      color: var(--text);
+      padding: 14px 16px;
+      font: inherit;
+    }
+
+    textarea {
+      min-height: 120px;
+      resize: vertical;
+    }
+
+    .device-list {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 10px;
+    }
+
+    .device-option {
+      display: flex;
+      gap: 12px;
+      align-items: flex-start;
+      padding: 14px;
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .device-option input[type="checkbox"] {
+      width: auto;
+      margin-top: 4px;
+      accent-color: #8ef0d0;
+    }
+
+    .device-meta strong {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 0.98rem;
+    }
+
+    .device-meta span {
+      color: var(--muted);
+      font-size: 0.86rem;
+    }
+
+    .actions {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    button {
+      border: 0;
+      border-radius: 999px;
+      padding: 12px 18px;
+      background: linear-gradient(135deg, #8ef0d0 0%, #f7d46f 100%);
+      color: #081116;
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
+    }
+
+    .helper {
+      color: var(--muted);
+      font-size: 0.86rem;
+      line-height: 1.5;
     }
 
     @media (max-width: 900px) {
       .eta-panel,
       .status-panel,
-      .wide-panel {
+      .wide-panel,
+      .full-panel {
         grid-column: span 12;
       }
 
@@ -266,7 +373,9 @@ var dashboardTemplate = template.Must(template.New("dashboard").Parse(`<!DOCTYPE
         grid-template-columns: 1fr;
       }
 
-      .kv {
+      .kv,
+      .field.half {
+        grid-column: span 12;
         grid-template-columns: 1fr;
         gap: 6px;
       }
@@ -344,11 +453,43 @@ var dashboardTemplate = template.Must(template.New("dashboard").Parse(`<!DOCTYPE
   "message": "loading"
 }</pre>
         </section>
+        <section class="panel full-panel">
+          <h2>HomePod Mini 測試播報</h2>
+          <div class="form-grid">
+            <div class="field">
+              <label for="broadcast-message">播報訊息</label>
+              <textarea id="broadcast-message" placeholder="例如：垃圾車測試廣播，請準備倒垃圾。"></textarea>
+            </div>
+            <div class="field half">
+              <label for="tts-entity">TTS 引擎</label>
+              <select id="tts-entity"></select>
+            </div>
+            <div class="field half">
+              <label for="tts-language">語言代碼（可留空）</label>
+              <input id="tts-language" type="text" placeholder="例如：zh-TW 或 en">
+            </div>
+            <div class="field">
+              <label>選擇要播報的 HomePod mini</label>
+              <div class="device-list" id="device-list">
+                <div class="helper">正在讀取可用裝置...</div>
+              </div>
+            </div>
+            <div class="field">
+              <div class="actions">
+                <button id="broadcast-button" type="button" disabled>送出測試播報</button>
+                <span class="helper" id="broadcast-summary">請先輸入訊息並勾選至少一台 HomePod。</span>
+              </div>
+              <div class="message" id="broadcast-result">這裡會顯示送出結果。</div>
+            </div>
+          </div>
+        </section>
       </div>
     </section>
   </main>
   <script>
     const statusURL = new URL("./status", window.location.href);
+    const broadcastOptionsURL = new URL("./api/broadcast/options", window.location.href);
+    const broadcastTestURL = new URL("./api/broadcast/test", window.location.href);
     const els = {
       routeTitle: document.getElementById("route-title"),
       routeSubtitle: document.getElementById("route-subtitle"),
@@ -374,8 +515,17 @@ var dashboardTemplate = template.Must(template.New("dashboard").Parse(`<!DOCTYPE
       apiEstimated: document.getElementById("api-estimated"),
       apiWaiting: document.getElementById("api-waiting"),
       rawJSON: document.getElementById("raw-json"),
-      statusLink: document.getElementById("status-link")
+      statusLink: document.getElementById("status-link"),
+      broadcastMessage: document.getElementById("broadcast-message"),
+      ttsEntity: document.getElementById("tts-entity"),
+      ttsLanguage: document.getElementById("tts-language"),
+      deviceList: document.getElementById("device-list"),
+      broadcastButton: document.getElementById("broadcast-button"),
+      broadcastSummary: document.getElementById("broadcast-summary"),
+      broadcastResult: document.getElementById("broadcast-result")
     };
+
+    let broadcastOptions = { media_players: [], tts_entities: [], default_tts_entity: "" };
 
     els.statusLink.href = statusURL.toString();
 
@@ -392,7 +542,7 @@ var dashboardTemplate = template.Must(template.New("dashboard").Parse(`<!DOCTYPE
     }
 
     function formatCoords(lat, lng) {
-      if (!lat && !lng) return "--";
+      if (typeof lat !== "number" || typeof lng !== "number") return "--";
       return lat.toFixed(6) + ", " + lng.toFixed(6);
     }
 
@@ -422,6 +572,74 @@ var dashboardTemplate = template.Must(template.New("dashboard").Parse(`<!DOCTYPE
         low: "低"
       };
       return labels[confidence] || confidence || "--";
+    }
+
+    function selectedTargets() {
+      return Array.from(document.querySelectorAll("input[name='broadcast-target']:checked")).map((node) => node.value);
+    }
+
+    function updateBroadcastButtonState() {
+      const hasMessage = els.broadcastMessage.value.trim().length > 0;
+      const targets = selectedTargets();
+      els.broadcastButton.disabled = !(hasMessage && targets.length > 0 && els.ttsEntity.value);
+      if (!hasMessage) {
+        els.broadcastSummary.textContent = "請先輸入測試播報內容。";
+      } else if (targets.length === 0) {
+        els.broadcastSummary.textContent = "請至少勾選一台要播報的 HomePod。";
+      } else if (!els.ttsEntity.value) {
+        els.broadcastSummary.textContent = "目前找不到可用的 TTS 引擎。";
+      } else {
+        els.broadcastSummary.textContent = "將送到 " + targets.length + " 台裝置。";
+      }
+    }
+
+    function renderBroadcastOptions(options) {
+      broadcastOptions = options || { media_players: [], tts_entities: [], default_tts_entity: "" };
+
+      els.ttsEntity.innerHTML = "";
+      if ((broadcastOptions.tts_entities || []).length === 0) {
+        const option = document.createElement("option");
+        option.textContent = "找不到可用 TTS";
+        option.value = "";
+        els.ttsEntity.appendChild(option);
+      } else {
+        broadcastOptions.tts_entities.forEach((entity) => {
+          const option = document.createElement("option");
+          option.value = entity.entity_id;
+          option.textContent = entity.friendly_name + " (" + entity.entity_id + ")";
+          if (entity.entity_id === broadcastOptions.default_tts_entity) {
+            option.selected = true;
+          }
+          els.ttsEntity.appendChild(option);
+        });
+      }
+
+      els.deviceList.innerHTML = "";
+      if ((broadcastOptions.media_players || []).length === 0) {
+        els.deviceList.innerHTML = "<div class='helper'>目前找不到可用的 HomePod 或 media_player。</div>";
+      } else {
+        broadcastOptions.media_players.forEach((device, index) => {
+          const label = document.createElement("label");
+          label.className = "device-option";
+
+          const input = document.createElement("input");
+          input.type = "checkbox";
+          input.name = "broadcast-target";
+          input.value = device.entity_id;
+          input.checked = index === 0;
+          input.addEventListener("change", updateBroadcastButtonState);
+
+          const meta = document.createElement("div");
+          meta.className = "device-meta";
+          meta.innerHTML = "<strong>" + device.friendly_name + "</strong><span>" + device.entity_id + " / " + device.state + "</span>";
+
+          label.appendChild(input);
+          label.appendChild(meta);
+          els.deviceList.appendChild(label);
+        });
+      }
+
+      updateBroadcastButtonState();
     }
 
     function render(status) {
@@ -473,7 +691,7 @@ var dashboardTemplate = template.Must(template.New("dashboard").Parse(`<!DOCTYPE
       els.truckCoords.textContent = status.gps_available ? formatCoords(status.truck_lat, status.truck_lng) : "--";
       els.targetCoords.textContent = formatCoords(status.target_lat, status.target_lng);
 
-      if (status.gps_available && status.target_lat && status.target_lng) {
+      if (status.gps_available && typeof status.target_lat === "number" && typeof status.target_lng === "number") {
         els.mapLink.href = mapURL(status.truck_lat, status.truck_lng, status.target_lat, status.target_lng);
         els.mapLink.textContent = "開啟垃圾車與站點路線";
       } else {
@@ -502,7 +720,62 @@ var dashboardTemplate = template.Must(template.New("dashboard").Parse(`<!DOCTYPE
       }
     }
 
+    async function loadBroadcastOptions() {
+      try {
+        const response = await fetch(broadcastOptionsURL, { cache: "no-store" });
+        if (!response.ok) {
+          throw new Error("HTTP " + response.status);
+        }
+        const payload = await response.json();
+        renderBroadcastOptions(payload);
+        els.broadcastResult.textContent = "已載入可用的播報裝置與 TTS 引擎。";
+        els.broadcastResult.className = "message";
+      } catch (error) {
+        els.deviceList.innerHTML = "<div class='helper'>裝置清單讀取失敗：" + error.message + "</div>";
+        els.broadcastResult.textContent = "無法讀取播報設定：" + error.message;
+        els.broadcastResult.className = "message error";
+        updateBroadcastButtonState();
+      }
+    }
+
+    async function submitBroadcast() {
+      const payload = {
+        message: els.broadcastMessage.value.trim(),
+        target_entity_ids: selectedTargets(),
+        tts_entity_id: els.ttsEntity.value,
+        language: els.ttsLanguage.value.trim()
+      };
+
+      els.broadcastButton.disabled = true;
+      els.broadcastResult.textContent = "正在送出測試播報...";
+      els.broadcastResult.className = "message";
+
+      try {
+        const response = await fetch(broadcastTestURL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        const text = await response.text();
+        if (!response.ok) {
+          throw new Error(text || ("HTTP " + response.status));
+        }
+        els.broadcastResult.textContent = "已送出測試播報到：" + payload.target_entity_ids.join(" / ");
+        els.broadcastResult.className = "message success";
+      } catch (error) {
+        els.broadcastResult.textContent = "播報送出失敗：" + error.message;
+        els.broadcastResult.className = "message error";
+      } finally {
+        updateBroadcastButtonState();
+      }
+    }
+
+    els.broadcastMessage.addEventListener("input", updateBroadcastButtonState);
+    els.ttsEntity.addEventListener("change", updateBroadcastButtonState);
+    els.broadcastButton.addEventListener("click", submitBroadcast);
+
     refreshStatus();
+    loadBroadcastOptions();
     window.setInterval(refreshStatus, 30000);
   </script>
 </body>
