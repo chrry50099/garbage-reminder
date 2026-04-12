@@ -28,6 +28,8 @@ type DeliveryRecord struct {
 	ReminderOffsetMinutes int       `json:"reminder_offset_minutes"`
 	DeliveryStatus        string    `json:"delivery_status"`
 	GPSMode               string    `json:"gps_mode"`
+	PredictionSource      string    `json:"prediction_source,omitempty"`
+	Confidence            string    `json:"confidence,omitempty"`
 	SentAt                time.Time `json:"sent_at"`
 }
 

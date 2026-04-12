@@ -158,16 +158,16 @@ func (c *Client) GetAllRouteStatusData(ctx context.Context, custID int) ([]Route
 	return statuses, nil
 }
 
-func (c *Client) ResolveTargetStop(ctx context.Context, custID, routeID, pointSeq int, pointName, targetTime string) (*TargetStop, error) {
+func (c *Client) ResolveTargetStop(ctx context.Context, custID, routeID, pointSeq int, pointName string) (*TargetStop, error) {
 	routes, err := c.GetAllRouteBasicData(ctx, custID)
 	if err != nil {
 		return nil, err
 	}
 
-	return FindTargetStop(routes, routeID, pointSeq, pointName, targetTime)
+	return FindTargetStop(routes, routeID, pointSeq, pointName)
 }
 
-func FindTargetStop(routes []Route, routeID, pointSeq int, pointName, targetTime string) (*TargetStop, error) {
+func FindTargetStop(routes []Route, routeID, pointSeq int, pointName string) (*TargetStop, error) {
 	for _, route := range routes {
 		if route.RouteID != routeID {
 			continue
@@ -180,9 +180,6 @@ func FindTargetStop(routes []Route, routeID, pointSeq int, pointName, targetTime
 			if point.PointName != pointName {
 				return nil, fmt.Errorf("target point mismatch: expected %q, got %q", pointName, point.PointName)
 			}
-			if !pointContainsTime(point, targetTime) {
-				return nil, fmt.Errorf("target point time mismatch: expected %s", targetTime)
-			}
 
 			return &TargetStop{
 				RouteID:       route.RouteID,
@@ -190,7 +187,7 @@ func FindTargetStop(routes []Route, routeID, pointSeq int, pointName, targetTime
 				PointID:       point.PointID,
 				PointSeq:      point.Seq,
 				PointName:     point.PointName,
-				ScheduledTime: targetTime,
+				ScheduledTime: firstPointTime(point),
 				GISX:          point.GISX,
 				GISY:          point.GISY,
 			}, nil
@@ -202,13 +199,13 @@ func FindTargetStop(routes []Route, routeID, pointSeq int, pointName, targetTime
 	return nil, fmt.Errorf("route %d not found", routeID)
 }
 
-func pointContainsTime(point Point, targetTime string) bool {
+func firstPointTime(point Point) string {
 	for _, detail := range point.Details {
-		if detail.Time == targetTime {
-			return true
+		if strings.TrimSpace(detail.Time) != "" {
+			return detail.Time
 		}
 	}
-	return false
+	return ""
 }
 
 func (c *Client) call(ctx context.Context, methodName string, payload map[string]any, out any, strictStatus bool) error {

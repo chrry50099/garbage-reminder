@@ -8,16 +8,23 @@ import (
 	"time"
 )
 
-const defaultEupfinBaseURL = "https://customer-tw.eupfin.com/Eup_Servlet_Nuser_SOAP/Eup_Servlet_Nuser_SOAP"
+const (
+	defaultEupfinBaseURL   = "https://customer-tw.eupfin.com/Eup_Servlet_Nuser_SOAP/Eup_Servlet_Nuser_SOAP"
+	defaultTargetDays      = "MON,TUE,WED,THU,FRI,SAT"
+	defaultCollectionStart = "19:00"
+	defaultCollectionEnd   = "21:30"
+)
 
 type Config struct {
 	TelegramBotToken string
 	TelegramChatID   string
-	EupfinBaseURL    string
-	StateFile        string
-	CheckInterval    time.Duration
-	GPSRefreshInterval time.Duration
+
+	EupfinBaseURL          string
+	StateFile              string
+	DatabaseFile           string
+	CheckInterval          time.Duration
 	SendTestMessageOnStart bool
+	HTTPPort               string
 
 	TargetCustID    int
 	TargetRouteID   int
@@ -26,7 +33,19 @@ type Config struct {
 	TargetTime      string
 	TargetDays      []time.Weekday
 
-	ReminderOffsets []int
+	CollectionStart string
+	CollectionEnd   string
+	AlertOffsets    []int
+	HistoryWeeks    int
+
+	ArrivalRadiusMeters float64
+	MatchRadiusMeters   float64
+	MinHistoryRuns      int
+
+	HABaseURL    string
+	HAToken      string
+	HANotifyMode string
+	HATTSTarget  string
 }
 
 func Load() (*Config, error) {
@@ -35,17 +54,34 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
-	gpsRefreshInterval, err := parseDurationEnv("GPS_REFRESH_INTERVAL", 5*time.Minute)
+	targetDays, err := parseWeekdays(getEnvOrDefault("TARGET_DAYS", defaultTargetDays))
 	if err != nil {
 		return nil, err
 	}
 
-	targetDays, err := parseWeekdays(os.Getenv("TARGET_DAYS"))
+	alertOffsets, err := parseAlertOffsets(
+		firstNonEmpty(os.Getenv("ALERT_OFFSETS"), os.Getenv("REMINDER_MINUTES")),
+	)
 	if err != nil {
 		return nil, err
 	}
 
-	reminderOffsets, err := parseReminderOffsets(os.Getenv("REMINDER_MINUTES"))
+	historyWeeks, err := parsePositiveIntEnv("HISTORY_WEEKS", 8)
+	if err != nil {
+		return nil, err
+	}
+
+	arrivalRadiusMeters, err := parsePositiveFloatEnv("ARRIVAL_RADIUS_METERS", 80)
+	if err != nil {
+		return nil, err
+	}
+
+	matchRadiusMeters, err := parsePositiveFloatEnv("MATCH_RADIUS_METERS", 250)
+	if err != nil {
+		return nil, err
+	}
+
+	minHistoryRuns, err := parsePositiveIntEnv("MIN_HISTORY_RUNS", 3)
 	if err != nil {
 		return nil, err
 	}
@@ -53,15 +89,31 @@ func Load() (*Config, error) {
 	cfg := &Config{
 		TelegramBotToken: strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN")),
 		TelegramChatID:   strings.TrimSpace(os.Getenv("TELEGRAM_CHAT_ID")),
-		EupfinBaseURL:    getEnvOrDefault("EUPFIN_BASE_URL", defaultEupfinBaseURL),
-		StateFile:        getEnvOrDefault("STATE_FILE", "data/state.json"),
-		CheckInterval:    checkInterval,
-		GPSRefreshInterval: gpsRefreshInterval,
-		SendTestMessageOnStart: parseBoolEnv("SEND_TEST_MESSAGE_ON_START", true),
-		TargetPointName:  strings.TrimSpace(os.Getenv("TARGET_POINT_NAME")),
-		TargetTime:       strings.TrimSpace(os.Getenv("TARGET_TIME")),
-		TargetDays:       targetDays,
-		ReminderOffsets:  reminderOffsets,
+
+		EupfinBaseURL:          getEnvOrDefault("EUPFIN_BASE_URL", defaultEupfinBaseURL),
+		StateFile:              getEnvOrDefault("STATE_FILE", "data/state.json"),
+		DatabaseFile:           getEnvOrDefault("DATABASE_FILE", "data/history.db"),
+		CheckInterval:          checkInterval,
+		SendTestMessageOnStart: parseBoolEnv("SEND_TEST_MESSAGE_ON_START", false),
+		HTTPPort:               getEnvOrDefault("PORT", "8080"),
+
+		TargetPointName: strings.TrimSpace(os.Getenv("TARGET_POINT_NAME")),
+		TargetTime:      strings.TrimSpace(os.Getenv("TARGET_TIME")),
+		TargetDays:      targetDays,
+
+		CollectionStart: getEnvOrDefault("COLLECTION_START", defaultCollectionStart),
+		CollectionEnd:   getEnvOrDefault("COLLECTION_END", defaultCollectionEnd),
+		AlertOffsets:    alertOffsets,
+		HistoryWeeks:    historyWeeks,
+
+		ArrivalRadiusMeters: arrivalRadiusMeters,
+		MatchRadiusMeters:   matchRadiusMeters,
+		MinHistoryRuns:      minHistoryRuns,
+
+		HABaseURL:    strings.TrimSpace(os.Getenv("HA_BASE_URL")),
+		HAToken:      strings.TrimSpace(os.Getenv("HA_TOKEN")),
+		HANotifyMode: strings.TrimSpace(os.Getenv("HA_NOTIFY_MODE")),
+		HATTSTarget:  strings.TrimSpace(os.Getenv("HA_TTS_TARGET")),
 	}
 
 	cfg.TargetCustID, err = parseRequiredIntEnv("TARGET_CUST_ID")
@@ -98,28 +150,92 @@ func (c *Config) Validate() error {
 	if c.TargetPointName == "" {
 		missing = append(missing, "TARGET_POINT_NAME")
 	}
-	if c.TargetTime == "" {
-		missing = append(missing, "TARGET_TIME")
-	}
 	if len(c.TargetDays) == 0 {
 		missing = append(missing, "TARGET_DAYS")
 	}
-	if len(c.ReminderOffsets) == 0 {
-		missing = append(missing, "REMINDER_MINUTES")
+	if len(c.AlertOffsets) == 0 {
+		missing = append(missing, "ALERT_OFFSETS")
+	}
+	if c.HABaseURL == "" {
+		missing = append(missing, "HA_BASE_URL")
+	}
+	if c.HAToken == "" {
+		missing = append(missing, "HA_TOKEN")
+	}
+	if c.HANotifyMode == "" {
+		missing = append(missing, "HA_NOTIFY_MODE")
+	}
+	if c.HATTSTarget == "" {
+		missing = append(missing, "HA_TTS_TARGET")
 	}
 
 	if len(missing) > 0 {
 		return fmt.Errorf("missing required environment variables: %s", strings.Join(missing, ", "))
 	}
 
-	if _, err := time.Parse("15:04", c.TargetTime); err != nil {
-		return fmt.Errorf("TARGET_TIME must use HH:MM format: %w", err)
+	if c.TargetTime != "" {
+		if _, err := time.Parse("15:04", c.TargetTime); err != nil {
+			return fmt.Errorf("TARGET_TIME must use HH:MM format: %w", err)
+		}
 	}
-	if c.GPSRefreshInterval <= 0 {
-		return fmt.Errorf("GPS_REFRESH_INTERVAL must be greater than 0")
+
+	if _, err := parseClock(c.CollectionStart); err != nil {
+		return fmt.Errorf("COLLECTION_START must use HH:MM format: %w", err)
+	}
+	if _, err := parseClock(c.CollectionEnd); err != nil {
+		return fmt.Errorf("COLLECTION_END must use HH:MM format: %w", err)
+	}
+	start, _ := parseClock(c.CollectionStart)
+	end, _ := parseClock(c.CollectionEnd)
+	if start >= end {
+		return fmt.Errorf("COLLECTION_START must be before COLLECTION_END")
+	}
+
+	switch c.HANotifyMode {
+	case "webhook", "service_call":
+	default:
+		return fmt.Errorf("HA_NOTIFY_MODE must be one of webhook or service_call")
+	}
+
+	if c.CheckInterval <= 0 {
+		return fmt.Errorf("CHECK_INTERVAL must be greater than 0")
+	}
+	if c.HistoryWeeks <= 0 {
+		return fmt.Errorf("HISTORY_WEEKS must be greater than 0")
+	}
+	if c.ArrivalRadiusMeters <= 0 {
+		return fmt.Errorf("ARRIVAL_RADIUS_METERS must be greater than 0")
+	}
+	if c.MatchRadiusMeters <= 0 {
+		return fmt.Errorf("MATCH_RADIUS_METERS must be greater than 0")
+	}
+	if c.MinHistoryRuns <= 0 {
+		return fmt.Errorf("MIN_HISTORY_RUNS must be greater than 0")
 	}
 
 	return nil
+}
+
+func (c *Config) CollectionWindowMinutes() (int, int, error) {
+	start, err := parseClock(c.CollectionStart)
+	if err != nil {
+		return 0, 0, err
+	}
+	end, err := parseClock(c.CollectionEnd)
+	if err != nil {
+		return 0, 0, err
+	}
+	return start, end, nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func getEnvOrDefault(key, defaultValue string) string {
@@ -140,6 +256,38 @@ func parseRequiredIntEnv(key string) (int, error) {
 		return 0, fmt.Errorf("%s must be an integer: %w", key, err)
 	}
 
+	return parsed, nil
+}
+
+func parsePositiveIntEnv(key string, fallback int) (int, error) {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback, nil
+	}
+
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be an integer: %w", key, err)
+	}
+	if parsed <= 0 {
+		return 0, fmt.Errorf("%s must be greater than 0", key)
+	}
+	return parsed, nil
+}
+
+func parsePositiveFloatEnv(key string, fallback float64) (float64, error) {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback, nil
+	}
+
+	parsed, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be a number: %w", key, err)
+	}
+	if parsed <= 0 {
+		return 0, fmt.Errorf("%s must be greater than 0", key)
+	}
 	return parsed, nil
 }
 
@@ -171,9 +319,9 @@ func parseBoolEnv(key string, fallback bool) bool {
 	return parsed
 }
 
-func parseReminderOffsets(raw string) ([]int, error) {
+func parseAlertOffsets(raw string) ([]int, error) {
 	if strings.TrimSpace(raw) == "" {
-		return nil, fmt.Errorf("REMINDER_MINUTES is required")
+		return nil, fmt.Errorf("ALERT_OFFSETS is required")
 	}
 
 	parts := strings.Split(raw, ",")
@@ -184,10 +332,10 @@ func parseReminderOffsets(raw string) ([]int, error) {
 		trimmed := strings.TrimSpace(part)
 		value, err := strconv.Atoi(trimmed)
 		if err != nil {
-			return nil, fmt.Errorf("invalid REMINDER_MINUTES value %q: %w", trimmed, err)
+			return nil, fmt.Errorf("invalid ALERT_OFFSETS value %q: %w", trimmed, err)
 		}
 		if value <= 0 {
-			return nil, fmt.Errorf("REMINDER_MINUTES values must be positive: %d", value)
+			return nil, fmt.Errorf("ALERT_OFFSETS values must be positive: %d", value)
 		}
 		if _, ok := seen[value]; ok {
 			continue
@@ -232,4 +380,12 @@ func parseWeekdays(raw string) ([]time.Weekday, error) {
 	}
 
 	return days, nil
+}
+
+func parseClock(raw string) (int, error) {
+	parsed, err := time.Parse("15:04", strings.TrimSpace(raw))
+	if err != nil {
+		return 0, err
+	}
+	return parsed.Hour()*60 + parsed.Minute(), nil
 }

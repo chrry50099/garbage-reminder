@@ -51,7 +51,7 @@ func TestResolveTargetStopParsesExpectedRoute(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(server.URL)
-	target, err := client.ResolveTargetStop(context.Background(), 5005808, 461, 27, "有謙家園", "20:30")
+	target, err := client.ResolveTargetStop(context.Background(), 5005808, 461, 27, "有謙家園")
 	if err != nil {
 		t.Fatalf("ResolveTargetStop() returned error: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestFindTargetStopRejectsMismatchedName(t *testing.T) {
 		},
 	}
 
-	if _, err := FindTargetStop(routes, 461, 27, "有謙家園", "20:30"); err == nil {
+	if _, err := FindTargetStop(routes, 461, 27, "有謙家園"); err == nil {
 		t.Fatal("expected FindTargetStop to reject mismatched point name")
 	}
 }

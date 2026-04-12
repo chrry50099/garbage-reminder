@@ -5,23 +5,26 @@ import (
 	"time"
 )
 
-func TestLoadRequiresTelegramAndTargetSettings(t *testing.T) {
+func TestLoadRequiresTelegramHAAndTargetSettings(t *testing.T) {
 	t.Setenv("TELEGRAM_BOT_TOKEN", "")
 	t.Setenv("TELEGRAM_CHAT_ID", "")
 	t.Setenv("TARGET_CUST_ID", "")
 	t.Setenv("TARGET_ROUTE_ID", "")
 	t.Setenv("TARGET_POINT_SEQ", "")
 	t.Setenv("TARGET_POINT_NAME", "")
-	t.Setenv("TARGET_TIME", "")
-	t.Setenv("TARGET_DAYS", "")
+	t.Setenv("ALERT_OFFSETS", "")
 	t.Setenv("REMINDER_MINUTES", "")
+	t.Setenv("HA_BASE_URL", "")
+	t.Setenv("HA_TOKEN", "")
+	t.Setenv("HA_NOTIFY_MODE", "")
+	t.Setenv("HA_TTS_TARGET", "")
 
 	if _, err := Load(); err == nil {
 		t.Fatal("expected Load to fail when required settings are missing")
 	}
 }
 
-func TestLoadParsesReminderDefaults(t *testing.T) {
+func TestLoadParsesCollectionDefaults(t *testing.T) {
 	setRequiredEnv(t)
 
 	cfg, err := Load()
@@ -32,17 +35,35 @@ func TestLoadParsesReminderDefaults(t *testing.T) {
 	if cfg.TargetCustID != 5005808 {
 		t.Fatalf("unexpected target cust id: %d", cfg.TargetCustID)
 	}
-	if len(cfg.TargetDays) != 4 {
+	if len(cfg.TargetDays) != 6 {
 		t.Fatalf("unexpected target days length: %d", len(cfg.TargetDays))
 	}
 	if cfg.CheckInterval != time.Minute {
 		t.Fatalf("unexpected default check interval: %s", cfg.CheckInterval)
 	}
-	if cfg.GPSRefreshInterval != 5*time.Minute {
-		t.Fatalf("unexpected default gps refresh interval: %s", cfg.GPSRefreshInterval)
+	if cfg.CollectionStart != "19:00" || cfg.CollectionEnd != "21:30" {
+		t.Fatalf("unexpected collection window: %s-%s", cfg.CollectionStart, cfg.CollectionEnd)
 	}
-	if !cfg.SendTestMessageOnStart {
-		t.Fatal("expected startup test message to be enabled by default")
+	if cfg.HistoryWeeks != 8 {
+		t.Fatalf("unexpected history weeks: %d", cfg.HistoryWeeks)
+	}
+	if cfg.SendTestMessageOnStart {
+		t.Fatal("expected startup test message to be disabled by default")
+	}
+}
+
+func TestLoadFallsBackToLegacyReminderMinutes(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("ALERT_OFFSETS", "")
+	t.Setenv("REMINDER_MINUTES", "10,3")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() returned error: %v", err)
+	}
+
+	if len(cfg.AlertOffsets) != 2 || cfg.AlertOffsets[0] != 10 || cfg.AlertOffsets[1] != 3 {
+		t.Fatalf("unexpected alert offsets: %+v", cfg.AlertOffsets)
 	}
 }
 
@@ -56,9 +77,12 @@ func setRequiredEnv(t *testing.T) {
 		"TARGET_ROUTE_ID":    "461",
 		"TARGET_POINT_SEQ":   "27",
 		"TARGET_POINT_NAME":  "有謙家園",
-		"TARGET_TIME":        "20:30",
-		"TARGET_DAYS":        "MON,TUE,THU,FRI",
-		"REMINDER_MINUTES":   "10,1",
+		"TARGET_DAYS":        "MON,TUE,WED,THU,FRI,SAT",
+		"ALERT_OFFSETS":      "10,3",
+		"HA_BASE_URL":        "http://homeassistant.local:8123",
+		"HA_TOKEN":           "token",
+		"HA_NOTIFY_MODE":     "webhook",
+		"HA_TTS_TARGET":      "garbage_truck",
 	}
 
 	for key, value := range env {
@@ -66,8 +90,16 @@ func setRequiredEnv(t *testing.T) {
 	}
 
 	t.Setenv("CHECK_INTERVAL", "")
-	t.Setenv("GPS_REFRESH_INTERVAL", "")
 	t.Setenv("SEND_TEST_MESSAGE_ON_START", "")
 	t.Setenv("EUPFIN_BASE_URL", "")
 	t.Setenv("STATE_FILE", "")
+	t.Setenv("DATABASE_FILE", "")
+	t.Setenv("COLLECTION_START", "")
+	t.Setenv("COLLECTION_END", "")
+	t.Setenv("HISTORY_WEEKS", "")
+	t.Setenv("ARRIVAL_RADIUS_METERS", "")
+	t.Setenv("MATCH_RADIUS_METERS", "")
+	t.Setenv("MIN_HISTORY_RUNS", "")
+	t.Setenv("TARGET_TIME", "")
+	t.Setenv("REMINDER_MINUTES", "")
 }

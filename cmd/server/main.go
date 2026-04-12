@@ -3,12 +3,15 @@ package main
 import (
 	"context"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"telegram-garbage-reminder/internal/config"
 	"telegram-garbage-reminder/internal/eupfin"
+	"telegram-garbage-reminder/internal/history"
 	"telegram-garbage-reminder/internal/notifier"
 	"telegram-garbage-reminder/internal/reminder"
 	"telegram-garbage-reminder/internal/state"
@@ -30,13 +33,24 @@ func main() {
 		log.Fatalf("Failed to create local state store: %v", err)
 	}
 
+	historyStore, err := history.NewSQLiteStore(cfg.DatabaseFile)
+	if err != nil {
+		log.Fatalf("Failed to create sqlite history store: %v", err)
+	}
+	defer historyStore.Close()
+
 	eupfinClient := eupfin.NewClient(cfg.EupfinBaseURL)
 	telegramNotifier := notifier.NewTelegram(cfg.TelegramBotToken, cfg.TelegramChatID)
-	service := reminder.NewService(cfg, eupfinClient, telegramNotifier, localState)
+	haNotifier := notifier.NewHomeAssistant(cfg.HABaseURL, cfg.HAToken, cfg.HANotifyMode, cfg.HATTSTarget)
+	alertNotifier := notifier.NewMultiSender(telegramNotifier, haNotifier)
+	service := reminder.NewService(cfg, eupfinClient, alertNotifier, telegramNotifier, localState, historyStore)
 
 	if err := service.Initialize(ctx); err != nil {
 		log.Fatalf("Startup validation failed: %v", err)
 	}
+
+	statusServer := startStatusServer(cfg.HTTPPort, service)
+	defer shutdownStatusServer(statusServer)
 
 	if cfg.SendTestMessageOnStart {
 		if err := service.SendStartupTestMessage(ctx); err != nil {
@@ -55,6 +69,7 @@ func main() {
 	}()
 
 	waitForShutdown(cancel)
+	shutdownStatusServer(statusServer)
 	<-done
 }
 
@@ -66,4 +81,35 @@ func waitForShutdown(cancel context.CancelFunc) {
 	<-quit
 	cancel()
 	log.Println("Reminder service stopped")
+}
+
+func startStatusServer(port string, service *reminder.Service) *http.Server {
+	mux := http.NewServeMux()
+	mux.Handle("/status", reminder.NewStatusHandler(service))
+
+	server := &http.Server{
+		Addr:    ":" + port,
+		Handler: mux,
+	}
+
+	go func() {
+		log.Printf("Status server listening on :%s", port)
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Printf("Status server failed: %v", err)
+		}
+	}()
+
+	return server
+}
+
+func shutdownStatusServer(server *http.Server) {
+	if server == nil {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := server.Shutdown(ctx); err != nil && err != http.ErrServerClosed {
+		log.Printf("Status server shutdown failed: %v", err)
+	}
 }

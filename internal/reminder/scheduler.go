@@ -4,30 +4,30 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
 	"telegram-garbage-reminder/internal/config"
 	"telegram-garbage-reminder/internal/eupfin"
+	"telegram-garbage-reminder/internal/geo"
+	"telegram-garbage-reminder/internal/history"
 	"telegram-garbage-reminder/internal/state"
 	"telegram-garbage-reminder/internal/utils"
 )
 
-const (
-	deliveryStatusSent = "sent"
-	gpsModeActual      = "actual"
-	gpsModeFallback    = "fallback_station"
-)
+const deliveryStatusSent = "sent"
 
 type eupfinClient interface {
 	GetDistrictByCustID(ctx context.Context, custID int) (*eupfin.DistrictConfig, error)
-	ResolveTargetStop(ctx context.Context, custID, routeID, pointSeq int, pointName, targetTime string) (*eupfin.TargetStop, error)
+	ResolveTargetStop(ctx context.Context, custID, routeID, pointSeq int, pointName string) (*eupfin.TargetStop, error)
 	GetCarStatusGarbage(ctx context.Context, custID, teamID int) ([]eupfin.CarStatus, error)
 	GetAllRouteStatusData(ctx context.Context, custID int) ([]eupfin.RouteStatus, error)
 }
 
-type telegramNotifier interface {
+type messageSender interface {
 	SendMessage(ctx context.Context, text string) error
 }
 
@@ -38,37 +38,80 @@ type localStore interface {
 	RecordDelivery(deliveryKey string, record state.DeliveryRecord) error
 }
 
+type historyStore interface {
+	EnsureRun(serviceDate string, weekday time.Weekday, routeID, pointID int, targetLat, targetLng float64, startedAt time.Time) (*history.Run, error)
+	GetRun(runID string) (*history.Run, error)
+	InsertSample(sample history.Sample) error
+	MarkRunCompleted(runID string, arrivalAt time.Time, arrivalSource string) error
+	PruneBefore(cutoff time.Time) error
+	ListHistoricalSamples(weekday time.Weekday, routeID, pointID int, since time.Time) ([]history.HistoricalSample, int, error)
+}
+
 type Service struct {
-	cfg      *config.Config
-	client   eupfinClient
-	notifier telegramNotifier
-	store    localStore
-	now      func() time.Time
-	mu       sync.Mutex
-	lastVehicleSnapshot liveVehicleSnapshot
-	lastVehicleFetchedAt time.Time
+	cfg             *config.Config
+	client          eupfinClient
+	alertNotifier   messageSender
+	startupNotifier messageSender
+	store           localStore
+	history         historyStore
+	now             func() time.Time
+
+	statusMu sync.RWMutex
+	status   StatusSnapshot
 }
 
-type liveVehicleSnapshot struct {
-	Lat        float64
-	Lng        float64
-	GPSMode    string
-	StatusNote string
-	FetchedAt  time.Time
+type StatusSnapshot struct {
+	UpdatedAt        time.Time           `json:"updated_at"`
+	Active           bool                `json:"active"`
+	ServiceDate      string              `json:"service_date,omitempty"`
+	Weekday          string              `json:"weekday,omitempty"`
+	CollectionWindow string              `json:"collection_window"`
+	RunStatus        string              `json:"run_status,omitempty"`
+	GPSAvailable     bool                `json:"gps_available"`
+	TruckLat         float64             `json:"truck_lat,omitempty"`
+	TruckLng         float64             `json:"truck_lng,omitempty"`
+	TargetLat        float64             `json:"target_lat,omitempty"`
+	TargetLng        float64             `json:"target_lng,omitempty"`
+	APIEstimatedText string              `json:"api_estimated_text,omitempty"`
+	APIWaitingTime   *int                `json:"api_waiting_time,omitempty"`
+	Prediction       *history.Prediction `json:"prediction,omitempty"`
+	NotifiedOffsets  []int               `json:"notified_offsets,omitempty"`
+	Message          string              `json:"message,omitempty"`
+	LastCollectedAt  *time.Time          `json:"last_collected_at,omitempty"`
 }
 
-func NewService(cfg *config.Config, client eupfinClient, notifier telegramNotifier, store localStore) *Service {
-	offsets := append([]int(nil), cfg.ReminderOffsets...)
+type liveObservation struct {
+	observation      history.Observation
+	apiEstimatedText string
+	apiWaitingTime   *int
+	arrivalSource    string
+}
+
+func NewService(
+	cfg *config.Config,
+	client eupfinClient,
+	alertNotifier messageSender,
+	startupNotifier messageSender,
+	store localStore,
+	historyStore historyStore,
+) *Service {
+	offsets := append([]int(nil), cfg.AlertOffsets...)
 	slices.Sort(offsets)
 	slices.Reverse(offsets)
-	cfg.ReminderOffsets = offsets
+	cfg.AlertOffsets = offsets
 
 	return &Service{
-		cfg:      cfg,
-		client:   client,
-		notifier: notifier,
-		store:    store,
-		now:      utils.NowInTaiwan,
+		cfg:             cfg,
+		client:          client,
+		alertNotifier:   alertNotifier,
+		startupNotifier: startupNotifier,
+		store:           store,
+		history:         historyStore,
+		now:             utils.NowInTaiwan,
+		status: StatusSnapshot{
+			CollectionWindow: fmt.Sprintf("%s-%s", cfg.CollectionStart, cfg.CollectionEnd),
+			Message:          "service starting",
+		},
 	}
 }
 
@@ -78,30 +121,46 @@ func (s *Service) Initialize(ctx context.Context) error {
 		return err
 	}
 
-	log.Printf("Validated target stop: route=%s route_id=%d seq=%d point=%s time=%s",
-		target.RouteName, target.RouteID, target.PointSeq, target.PointName, target.ScheduledTime)
+	if err := s.history.PruneBefore(s.now().AddDate(0, 0, -7*s.cfg.HistoryWeeks)); err != nil {
+		return fmt.Errorf("prune old history: %w", err)
+	}
+
+	log.Printf("Validated target stop: route=%s route_id=%d seq=%d point=%s",
+		target.RouteName, target.RouteID, target.PointSeq, target.PointName)
 	return nil
 }
 
 func (s *Service) SendStartupTestMessage(ctx context.Context) error {
+	if s.startupNotifier == nil {
+		return nil
+	}
+
 	target, err := s.resolveTarget(ctx)
 	if err != nil {
 		return err
 	}
 
 	now := s.now().In(utils.GetTaiwanTimezone())
-	scheduledAt, err := combineDateAndClock(now, target.ScheduledTime)
-	if err != nil {
-		return err
+	message := fmt.Sprintf(
+		"🧪 垃圾車服務啟動\n路線：%s\n站點：%s（第 %d 站）\n收集時窗：%s-%s\n提醒門檻：%v 分鐘\n歷史保留：%d 週\nHA 模式：%s\n狀態端點：/status",
+		target.RouteName,
+		target.PointName,
+		target.PointSeq,
+		s.cfg.CollectionStart,
+		s.cfg.CollectionEnd,
+		s.cfg.AlertOffsets,
+		s.cfg.HistoryWeeks,
+		s.cfg.HANotifyMode,
+	)
+	if err := s.startupNotifier.SendMessage(ctx, message); err != nil {
+		return fmt.Errorf("send startup message: %w", err)
 	}
 
-	liveSnapshot := s.resolveVehicleSnapshot(ctx, target)
-	message := s.buildStartupTestMessage(now, scheduledAt, target, liveSnapshot)
-	if err := s.notifier.SendMessage(ctx, message); err != nil {
-		return fmt.Errorf("send startup test message: %w", err)
-	}
-
-	log.Printf("Startup test message sent: gps_mode=%s", liveSnapshot.GPSMode)
+	s.updateStatus(StatusSnapshot{
+		UpdatedAt:        now,
+		CollectionWindow: fmt.Sprintf("%s-%s", s.cfg.CollectionStart, s.cfg.CollectionEnd),
+		Message:          "startup test sent",
+	})
 	return nil
 }
 
@@ -109,16 +168,16 @@ func (s *Service) Start(ctx context.Context) {
 	ticker := time.NewTicker(s.cfg.CheckInterval)
 	defer ticker.Stop()
 
-	log.Printf("Reminder scheduler started, interval=%s", s.cfg.CheckInterval)
+	log.Printf("Reminder collector started, interval=%s", s.cfg.CheckInterval)
 
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("Reminder scheduler stopped")
+			log.Println("Reminder collector stopped")
 			return
 		case <-ticker.C:
 			if err := s.CheckOnce(ctx); err != nil {
-				log.Printf("Reminder check failed: %v", err)
+				log.Printf("Collection tick failed: %v", err)
 			}
 		}
 	}
@@ -126,7 +185,33 @@ func (s *Service) Start(ctx context.Context) {
 
 func (s *Service) CheckOnce(ctx context.Context) error {
 	now := s.now().In(utils.GetTaiwanTimezone())
+	serviceDate := now.Format("2006-01-02")
+
+	if err := s.history.PruneBefore(now.AddDate(0, 0, -7*s.cfg.HistoryWeeks)); err != nil {
+		return err
+	}
+
 	if !s.isTargetDay(now.Weekday()) {
+		s.updateStatus(StatusSnapshot{
+			UpdatedAt:        now,
+			Active:           false,
+			ServiceDate:      serviceDate,
+			Weekday:          now.Weekday().String(),
+			CollectionWindow: fmt.Sprintf("%s-%s", s.cfg.CollectionStart, s.cfg.CollectionEnd),
+			Message:          "inactive weekday",
+		})
+		return nil
+	}
+
+	if !s.isWithinCollectionWindow(now) {
+		s.updateStatus(StatusSnapshot{
+			UpdatedAt:        now,
+			Active:           false,
+			ServiceDate:      serviceDate,
+			Weekday:          now.Weekday().String(),
+			CollectionWindow: fmt.Sprintf("%s-%s", s.cfg.CollectionStart, s.cfg.CollectionEnd),
+			Message:          "outside collection window",
+		})
 		return nil
 	}
 
@@ -135,56 +220,124 @@ func (s *Service) CheckOnce(ctx context.Context) error {
 		return err
 	}
 
-	scheduledAt, err := combineDateAndClock(now, target.ScheduledTime)
+	run, err := s.history.EnsureRun(serviceDate, now.Weekday(), target.RouteID, target.PointID, target.GISY, target.GISX, now)
+	if err != nil {
+		return fmt.Errorf("ensure history run: %w", err)
+	}
+	if run != nil && run.Status == "completed" {
+		s.updateStatus(StatusSnapshot{
+			UpdatedAt:        now,
+			Active:           false,
+			ServiceDate:      serviceDate,
+			Weekday:          now.Weekday().String(),
+			CollectionWindow: fmt.Sprintf("%s-%s", s.cfg.CollectionStart, s.cfg.CollectionEnd),
+			RunStatus:        run.Status,
+			TargetLat:        target.GISY,
+			TargetLng:        target.GISX,
+			NotifiedOffsets:  s.notifiedOffsets(serviceDate),
+			Message:          "run already completed",
+		})
+		return nil
+	}
+
+	live, err := s.collectLiveObservation(ctx, target, now)
 	if err != nil {
 		return err
 	}
 
-	if !now.Before(scheduledAt) {
-		return nil
+	sample := history.Sample{
+		RunID:               serviceDate,
+		ServiceDate:         serviceDate,
+		Weekday:             now.Weekday(),
+		RouteID:             target.RouteID,
+		PointID:             target.PointID,
+		TruckLat:            live.observation.TruckLat,
+		TruckLng:            live.observation.TruckLng,
+		GPSAvailable:        live.observation.GPSAvailable,
+		APIEstimatedMinutes: live.observation.APIEstimatedMinutes,
+		APIEstimatedText:    live.apiEstimatedText,
+		APIWaitingTime:      live.apiWaitingTime,
+		CollectedAt:         now,
+	}
+	if err := s.history.InsertSample(sample); err != nil {
+		return fmt.Errorf("insert historical sample: %w", err)
 	}
 
-	for _, offset := range s.cfg.ReminderOffsets {
-		reminderAt := scheduledAt.Add(-time.Duration(offset) * time.Minute)
-		if now.Before(reminderAt) {
-			continue
+	runStatus := "collecting"
+	if live.arrivalSource != "" {
+		if err := s.history.MarkRunCompleted(serviceDate, now, live.arrivalSource); err != nil {
+			return fmt.Errorf("mark run completed: %w", err)
 		}
+		runStatus = "completed"
+	}
 
-		deliveryKey := buildDeliveryKey(now.Format("2006-01-02"), offset)
-		if s.store.HasDelivery(deliveryKey) {
-			continue
-		}
+	historicalSamples, historicalRuns, err := s.history.ListHistoricalSamples(
+		now.Weekday(),
+		target.RouteID,
+		target.PointID,
+		now.AddDate(0, 0, -7*s.cfg.HistoryWeeks),
+	)
+	if err != nil {
+		return fmt.Errorf("load historical samples: %w", err)
+	}
 
-		if err := s.dispatchReminder(ctx, now, scheduledAt, offset, target, deliveryKey); err != nil {
+	prediction := history.PredictFromHistory(live.observation, historicalSamples, historicalRuns, history.PredictorConfig{
+		MatchRadiusMeters: s.cfg.MatchRadiusMeters,
+		MinHistoryRuns:    s.cfg.MinHistoryRuns,
+	})
+	if prediction == nil {
+		prediction = history.PredictFromFallback(live.observation)
+	}
+
+	if prediction != nil {
+		if err := s.dispatchNotifications(ctx, serviceDate, now, target, live, prediction); err != nil {
 			return err
 		}
 	}
 
+	lastCollectedAt := now
+	s.updateStatus(StatusSnapshot{
+		UpdatedAt:        now,
+		Active:           true,
+		ServiceDate:      serviceDate,
+		Weekday:          now.Weekday().String(),
+		CollectionWindow: fmt.Sprintf("%s-%s", s.cfg.CollectionStart, s.cfg.CollectionEnd),
+		RunStatus:        runStatus,
+		GPSAvailable:     live.observation.GPSAvailable,
+		TruckLat:         live.observation.TruckLat,
+		TruckLng:         live.observation.TruckLng,
+		TargetLat:        target.GISY,
+		TargetLng:        target.GISX,
+		APIEstimatedText: live.apiEstimatedText,
+		APIWaitingTime:   live.apiWaitingTime,
+		Prediction:       prediction,
+		NotifiedOffsets:  s.notifiedOffsets(serviceDate),
+		LastCollectedAt:  &lastCollectedAt,
+		Message:          s.statusMessage(runStatus, prediction),
+	})
+
 	return nil
 }
 
-func (s *Service) dispatchReminder(ctx context.Context, now, scheduledAt time.Time, offset int, target *state.CachedTarget, deliveryKey string) error {
-	liveSnapshot := s.resolveVehicleSnapshot(ctx, target)
-	message := s.buildReminderMessage(now, scheduledAt, offset, target, liveSnapshot)
+func (s *Service) CurrentStatus() StatusSnapshot {
+	s.statusMu.RLock()
+	defer s.statusMu.RUnlock()
 
-	if err := s.notifier.SendMessage(ctx, message); err != nil {
-		return fmt.Errorf("send telegram reminder: %w", err)
+	snapshot := s.status
+	if snapshot.Prediction != nil {
+		copyPrediction := *snapshot.Prediction
+		snapshot.Prediction = &copyPrediction
 	}
-
-	record := state.DeliveryRecord{
-		ScheduledDate:         now.Format("2006-01-02"),
-		ReminderOffsetMinutes: offset,
-		DeliveryStatus:        deliveryStatusSent,
-		GPSMode:               liveSnapshot.GPSMode,
-		SentAt:                s.now(),
+	if snapshot.APIWaitingTime != nil {
+		waiting := *snapshot.APIWaitingTime
+		snapshot.APIWaitingTime = &waiting
 	}
-
-	if err := s.store.RecordDelivery(deliveryKey, record); err != nil {
-		return fmt.Errorf("record delivery state: %w", err)
+	if snapshot.LastCollectedAt != nil {
+		collectedAt := *snapshot.LastCollectedAt
+		snapshot.LastCollectedAt = &collectedAt
 	}
-
-	log.Printf("Reminder sent: offset=%d gps_mode=%s", offset, liveSnapshot.GPSMode)
-	return nil
+	snapshot.NotifiedOffsets = append([]int(nil), snapshot.NotifiedOffsets...)
+	return snapshot
 }
 
 func (s *Service) refreshTarget(ctx context.Context) (*state.CachedTarget, error) {
@@ -199,7 +352,6 @@ func (s *Service) refreshTarget(ctx context.Context) (*state.CachedTarget, error
 		s.cfg.TargetRouteID,
 		s.cfg.TargetPointSeq,
 		s.cfg.TargetPointName,
-		s.cfg.TargetTime,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("resolve target stop: %w", err)
@@ -243,127 +395,135 @@ func (s *Service) resolveTarget(ctx context.Context) (*state.CachedTarget, error
 	return cached, nil
 }
 
-func (s *Service) resolveVehicleSnapshot(ctx context.Context, target *state.CachedTarget) liveVehicleSnapshot {
-	s.mu.Lock()
-	if !s.lastVehicleFetchedAt.IsZero() && s.now().Sub(s.lastVehicleFetchedAt) < s.cfg.GPSRefreshInterval {
-		cached := s.lastVehicleSnapshot
-		s.mu.Unlock()
-		return cached
-	}
-	s.mu.Unlock()
-
-	fallback := liveVehicleSnapshot{
-		Lat:        target.GISY,
-		Lng:        target.GISX,
-		GPSMode:    gpsModeFallback,
-		StatusNote: fmt.Sprintf("GPS 暫不可用，已改用 %s 站點位置。", target.PointName),
-		FetchedAt:  s.now(),
+func (s *Service) collectLiveObservation(ctx context.Context, target *state.CachedTarget, now time.Time) (*liveObservation, error) {
+	result := &liveObservation{
+		observation: history.Observation{
+			CollectedAt: now,
+			Weekday:     now.Weekday(),
+			RouteID:     target.RouteID,
+			PointID:     target.PointID,
+		},
 	}
 
-	cars, err := s.client.GetCarStatusGarbage(ctx, target.CustID, target.TeamID)
-	if err == nil {
+	cars, carsErr := s.client.GetCarStatusGarbage(ctx, target.CustID, target.TeamID)
+	if carsErr == nil {
 		for _, car := range cars {
 			if car.RouteID == target.RouteID && car.GISY != 0 && car.GISX != 0 {
-				snapshot := liveVehicleSnapshot{
-					Lat:        car.GISY,
-					Lng:        car.GISX,
-					GPSMode:    gpsModeActual,
-					StatusNote: "已使用即時 GPS 車輛位置。",
-					FetchedAt:  s.now(),
-				}
-				s.cacheVehicleSnapshot(snapshot)
-				return snapshot
+				result.observation.GPSAvailable = true
+				result.observation.TruckLat = car.GISY
+				result.observation.TruckLng = car.GISX
+				break
 			}
 		}
 	}
 
-	statuses, err := s.client.GetAllRouteStatusData(ctx, target.CustID)
-	if err == nil {
-		for _, routeStatus := range statuses {
-			if routeStatus.RouteID != target.RouteID {
-				continue
+	statuses, statusesErr := s.client.GetAllRouteStatusData(ctx, target.CustID)
+	if statusesErr == nil {
+		if pointStatus := findTargetPointStatus(statuses, target.RouteID, target.PointID); pointStatus != nil {
+			result.apiEstimatedText = strings.TrimSpace(pointStatus.EstimatedTime)
+			result.observation.APIEstimatedText = result.apiEstimatedText
+			if estimated := parseEstimatedMinutes(now, pointStatus.EstimatedTime); estimated != nil {
+				result.observation.APIEstimatedMinutes = estimated
 			}
-			for _, pointStatus := range routeStatus.Points {
-				if pointStatus.PointID != target.PointID {
-					continue
-				}
-				if pointStatus.EstimatedTime != "" {
-					fallback.StatusNote = fmt.Sprintf("GPS 暫不可用，已改用 %s 站點位置。API 估計到站：%s。", target.PointName, pointStatus.EstimatedTime)
-					s.cacheVehicleSnapshot(fallback)
-					return fallback
-				}
-				if pointStatus.WaitingTime >= 0 {
-					fallback.StatusNote = fmt.Sprintf("GPS 暫不可用，已改用 %s 站點位置。API 等待狀態：%s。", target.PointName, waitingTimeText(pointStatus.WaitingTime))
-					s.cacheVehicleSnapshot(fallback)
-					return fallback
-				}
-			}
+
+			waiting := pointStatus.WaitingTime
+			result.apiWaitingTime = &waiting
+			result.observation.APIWaitingTime = &waiting
 		}
 	}
 
-	s.cacheVehicleSnapshot(fallback)
-	return fallback
-}
-
-func (s *Service) buildReminderMessage(now, scheduledAt time.Time, offset int, target *state.CachedTarget, vehicle liveVehicleSnapshot) string {
-	reminderLabel := fmt.Sprintf("%d 分鐘前", offset)
-	if offset == 1 {
-		reminderLabel = "1 分鐘前"
+	if carsErr != nil && statusesErr != nil {
+		return nil, fmt.Errorf("fetch live route data failed: gps=%v; status=%v", carsErr, statusesErr)
 	}
 
-	gpsLabel := "站點備援"
-	if vehicle.GPSMode == gpsModeActual {
-		gpsLabel = "即時 GPS"
+	result.arrivalSource = detectArrival(result.observation, target, s.cfg.ArrivalRadiusMeters)
+	return result, nil
+}
+
+func (s *Service) dispatchNotifications(
+	ctx context.Context,
+	serviceDate string,
+	now time.Time,
+	target *state.CachedTarget,
+	live *liveObservation,
+	prediction *history.Prediction,
+) error {
+	for _, offset := range s.cfg.AlertOffsets {
+		if prediction.RemainingMinutes > offset {
+			continue
+		}
+
+		deliveryKey := buildDeliveryKey(serviceDate, offset)
+		if s.store.HasDelivery(deliveryKey) {
+			continue
+		}
+
+		message := s.buildAlertMessage(now, offset, target, live, prediction)
+		if err := s.alertNotifier.SendMessage(ctx, message); err != nil {
+			return fmt.Errorf("send alert notification: %w", err)
+		}
+
+		record := state.DeliveryRecord{
+			ScheduledDate:         serviceDate,
+			ReminderOffsetMinutes: offset,
+			DeliveryStatus:        deliveryStatusSent,
+			GPSMode:               sourceGPSMode(live.observation.GPSAvailable),
+			PredictionSource:      prediction.Source,
+			Confidence:            prediction.Confidence,
+			SentAt:                now,
+		}
+
+		if err := s.store.RecordDelivery(deliveryKey, record); err != nil {
+			return fmt.Errorf("record delivery state: %w", err)
+		}
+
+		log.Printf("Alert sent: offset=%d source=%s confidence=%s", offset, prediction.Source, prediction.Confidence)
+	}
+
+	return nil
+}
+
+func (s *Service) buildAlertMessage(
+	now time.Time,
+	offset int,
+	target *state.CachedTarget,
+	live *liveObservation,
+	prediction *history.Prediction,
+) string {
+	gpsLabel := "不可用"
+	originLat := target.GISY
+	originLng := target.GISX
+	if live.observation.GPSAvailable {
+		gpsLabel = "可用"
+		originLat = live.observation.TruckLat
+		originLng = live.observation.TruckLng
+	}
+
+	waitingText := "未知"
+	if live.apiWaitingTime != nil {
+		waitingText = waitingTimeText(*live.apiWaitingTime)
 	}
 
 	return fmt.Sprintf(
-		"🗑️ 垃圾車提醒（%s）\n路線：%s\n站點：%s（第 %d 站）\n預定到站：%s\n目前時間：%s\n垃圾車定位：%s\n垃圾車座標：%.6f, %.6f\n有謙家園座標：%.6f, %.6f\n%s\n地圖：%s",
-		reminderLabel,
+		"🗑️ 垃圾車提醒（%d 分鐘門檻）\n路線：%s\n站點：%s（第 %d 站）\n目前時間：%s\n預測到站：%s\n剩餘時間：%d 分鐘\n資料來源：%s\n信心：%s\nGPS：%s\n垃圾車座標：%.6f, %.6f\n有謙家園座標：%.6f, %.6f\nAPI EstimatedTime：%s\nAPI WaitingTime：%s\n地圖：%s",
+		offset,
 		target.RouteName,
 		target.PointName,
 		target.PointSeq,
-		scheduledAt.Format("2006-01-02 15:04"),
 		now.Format("2006-01-02 15:04"),
+		prediction.PredictedArrivalAt.Format("2006-01-02 15:04"),
+		prediction.RemainingMinutes,
+		prediction.Source,
+		prediction.Confidence,
 		gpsLabel,
-		vehicle.Lat,
-		vehicle.Lng,
+		originLat,
+		originLng,
 		target.GISY,
 		target.GISX,
-		vehicle.StatusNote,
-		buildDualMarkerMapURL(vehicle.Lat, vehicle.Lng, target.GISY, target.GISX),
+		firstNonEmpty(live.apiEstimatedText, "未知"),
+		waitingText,
+		buildDualMarkerMapURL(originLat, originLng, target.GISY, target.GISX),
 	)
-}
-
-func (s *Service) buildStartupTestMessage(now, scheduledAt time.Time, target *state.CachedTarget, vehicle liveVehicleSnapshot) string {
-	gpsLabel := "站點備援"
-	if vehicle.GPSMode == gpsModeActual {
-		gpsLabel = "即時 GPS"
-	}
-
-	return fmt.Sprintf(
-		"🧪 啟動測試提醒\n路線：%s\n站點：%s（第 %d 站）\n預定到站：%s\n目前時間：%s\n垃圾車定位：%s\n垃圾車座標：%.6f, %.6f\n有謙家園座標：%.6f, %.6f\nGPS 查詢冷卻：%s\n%s\n地圖：%s",
-		target.RouteName,
-		target.PointName,
-		target.PointSeq,
-		scheduledAt.Format("2006-01-02 15:04"),
-		now.Format("2006-01-02 15:04"),
-		gpsLabel,
-		vehicle.Lat,
-		vehicle.Lng,
-		target.GISY,
-		target.GISX,
-		s.cfg.GPSRefreshInterval,
-		vehicle.StatusNote,
-		buildDualMarkerMapURL(vehicle.Lat, vehicle.Lng, target.GISY, target.GISX),
-	)
-}
-
-func (s *Service) cacheVehicleSnapshot(snapshot liveVehicleSnapshot) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	s.lastVehicleSnapshot = snapshot
-	s.lastVehicleFetchedAt = snapshot.FetchedAt
 }
 
 func (s *Service) isTargetDay(day time.Weekday) bool {
@@ -373,6 +533,98 @@ func (s *Service) isTargetDay(day time.Weekday) bool {
 		}
 	}
 	return false
+}
+
+func (s *Service) isWithinCollectionWindow(now time.Time) bool {
+	start, end, err := s.cfg.CollectionWindowMinutes()
+	if err != nil {
+		return false
+	}
+	current := now.Hour()*60 + now.Minute()
+	return current >= start && current <= end
+}
+
+func (s *Service) statusMessage(runStatus string, prediction *history.Prediction) string {
+	if prediction == nil {
+		if runStatus == "completed" {
+			return "run completed without prediction"
+		}
+		return "collecting samples; waiting for prediction"
+	}
+	return fmt.Sprintf("prediction ready via %s", prediction.Source)
+}
+
+func (s *Service) notifiedOffsets(serviceDate string) []int {
+	offsets := make([]int, 0, len(s.cfg.AlertOffsets))
+	for _, offset := range s.cfg.AlertOffsets {
+		if s.store.HasDelivery(buildDeliveryKey(serviceDate, offset)) {
+			offsets = append(offsets, offset)
+		}
+	}
+	return offsets
+}
+
+func (s *Service) updateStatus(snapshot StatusSnapshot) {
+	s.statusMu.Lock()
+	defer s.statusMu.Unlock()
+	s.status = snapshot
+}
+
+func findTargetPointStatus(statuses []eupfin.RouteStatus, routeID, pointID int) *eupfin.RouteStatusPoint {
+	for _, routeStatus := range statuses {
+		if routeStatus.RouteID != routeID {
+			continue
+		}
+		for _, pointStatus := range routeStatus.Points {
+			if pointStatus.PointID == pointID {
+				copy := pointStatus
+				return &copy
+			}
+		}
+	}
+	return nil
+}
+
+func detectArrival(observation history.Observation, target *state.CachedTarget, arrivalRadiusMeters float64) string {
+	if observation.GPSAvailable {
+		if geo.CalculateDistance(observation.TruckLat, observation.TruckLng, target.GISY, target.GISX) <= arrivalRadiusMeters {
+			return "gps_radius"
+		}
+	}
+	if observation.APIWaitingTime != nil && *observation.APIWaitingTime == 0 {
+		return "api_waiting_time"
+	}
+	if observation.APIEstimatedMinutes != nil && *observation.APIEstimatedMinutes <= 1 {
+		return "api_estimated_time"
+	}
+	return ""
+}
+
+func parseEstimatedMinutes(now time.Time, raw string) *int {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return nil
+	}
+
+	if strings.Contains(value, ":") {
+		parsed, err := time.ParseInLocation("15:04", value, utils.GetTaiwanTimezone())
+		if err != nil {
+			return nil
+		}
+		estimatedAt := time.Date(now.Year(), now.Month(), now.Day(), parsed.Hour(), parsed.Minute(), 0, 0, utils.GetTaiwanTimezone())
+		remaining := int(math.Ceil(estimatedAt.Sub(now).Minutes()))
+		if remaining < 0 {
+			remaining = 0
+		}
+		return &remaining
+	}
+
+	var minutes int
+	if _, err := fmt.Sscanf(value, "%d", &minutes); err == nil && minutes >= 0 {
+		return &minutes
+	}
+
+	return nil
 }
 
 func waitingTimeText(waitingTime int) string {
@@ -388,26 +640,15 @@ func waitingTimeText(waitingTime int) string {
 	}
 }
 
-func buildDeliveryKey(date string, offset int) string {
-	return fmt.Sprintf("%s|%d", date, offset)
+func sourceGPSMode(gpsAvailable bool) string {
+	if gpsAvailable {
+		return "actual"
+	}
+	return "fallback_station"
 }
 
-func combineDateAndClock(now time.Time, clock string) (time.Time, error) {
-	parsed, err := time.ParseInLocation("15:04", clock, utils.GetTaiwanTimezone())
-	if err != nil {
-		return time.Time{}, fmt.Errorf("parse target time: %w", err)
-	}
-
-	return time.Date(
-		now.Year(),
-		now.Month(),
-		now.Day(),
-		parsed.Hour(),
-		parsed.Minute(),
-		0,
-		0,
-		utils.GetTaiwanTimezone(),
-	), nil
+func buildDeliveryKey(date string, offset int) string {
+	return fmt.Sprintf("%s|%d", date, offset)
 }
 
 func buildDualMarkerMapURL(vehicleLat, vehicleLng, targetLat, targetLng float64) string {
@@ -418,4 +659,13 @@ func buildDualMarkerMapURL(vehicleLat, vehicleLng, targetLat, targetLng float64)
 		targetLat,
 		targetLng,
 	)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
