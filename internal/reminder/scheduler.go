@@ -67,6 +67,9 @@ type StatusSnapshot struct {
 	Weekday          string              `json:"weekday,omitempty"`
 	CollectionWindow string              `json:"collection_window"`
 	RunStatus        string              `json:"run_status,omitempty"`
+	RouteName        string              `json:"route_name,omitempty"`
+	PointName        string              `json:"point_name,omitempty"`
+	PointSeq         int                 `json:"point_seq,omitempty"`
 	GPSAvailable     bool                `json:"gps_available"`
 	TruckLat         float64             `json:"truck_lat,omitempty"`
 	TruckLng         float64             `json:"truck_lng,omitempty"`
@@ -159,6 +162,9 @@ func (s *Service) SendStartupTestMessage(ctx context.Context) error {
 	s.updateStatus(StatusSnapshot{
 		UpdatedAt:        now,
 		CollectionWindow: fmt.Sprintf("%s-%s", s.cfg.CollectionStart, s.cfg.CollectionEnd),
+		RouteName:        target.RouteName,
+		PointName:        target.PointName,
+		PointSeq:         target.PointSeq,
 		Message:          "startup test sent",
 	})
 	return nil
@@ -232,6 +238,9 @@ func (s *Service) CheckOnce(ctx context.Context) error {
 			Weekday:          now.Weekday().String(),
 			CollectionWindow: fmt.Sprintf("%s-%s", s.cfg.CollectionStart, s.cfg.CollectionEnd),
 			RunStatus:        run.Status,
+			RouteName:        target.RouteName,
+			PointName:        target.PointName,
+			PointSeq:         target.PointSeq,
 			TargetLat:        target.GISY,
 			TargetLng:        target.GISX,
 			NotifiedOffsets:  s.notifiedOffsets(serviceDate),
@@ -303,6 +312,9 @@ func (s *Service) CheckOnce(ctx context.Context) error {
 		Weekday:          now.Weekday().String(),
 		CollectionWindow: fmt.Sprintf("%s-%s", s.cfg.CollectionStart, s.cfg.CollectionEnd),
 		RunStatus:        runStatus,
+		RouteName:        target.RouteName,
+		PointName:        target.PointName,
+		PointSeq:         target.PointSeq,
 		GPSAvailable:     live.observation.GPSAvailable,
 		TruckLat:         live.observation.TruckLat,
 		TruckLng:         live.observation.TruckLng,

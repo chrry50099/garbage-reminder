@@ -6,6 +6,7 @@ Home Assistant / Telegram 垃圾車動態預測服務
 
 - Telegram 訊息
 - Home Assistant 內的 HomePod Mini TTS 廣播
+- Home Assistant 側邊欄可直接打開的 ETA 狀態頁
 
 ## 推薦安裝方式
 
@@ -31,6 +32,7 @@ Home Assistant OS 版本安裝說明請看 `DOCS.md`。
 - 在 `10` 分鐘與 `3` 分鐘門檻發送雙通道提醒
 - 本機 JSON state 去重，避免重啟後重複通知
 - 提供 `/status` 只讀端點，方便 Home Assistant REST sensor 或手動檢查
+- Home Assistant OS App 版本提供 Ingress UI，可從 HA 側邊欄直接查看 ETA、GPS、通知狀態
 
 Home Assistant OS App 版本預設不綁定固定 host port，避免和樹梅派上其他服務撞埠。
 
@@ -99,6 +101,17 @@ go run cmd/server/main.go
 - 最新 GPS 與 API 狀態
 - 最新預測到站時間、剩餘分鐘、資料來源、信心
 - 今天哪些提醒門檻已經送出
+
+## Home Assistant 側邊欄 UI
+
+Home Assistant OS App 版本會自動在側邊欄顯示 `Garbage ETA`，打開後可看到：
+
+- 目前是否在收集視窗內
+- 最新 ETA 與預測來源
+- 垃圾車 GPS / 目標站點座標
+- API EstimatedTime / WaitingTime
+- 當天已送出的提醒門檻
+- 原始 `/status` JSON 方便除錯
 
 ## Docker / Raspberry Pi
 

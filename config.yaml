@@ -1,5 +1,5 @@
 name: "Garbage ETA Predictor"
-version: "0.2.2"
+version: "0.3.0"
 slug: "garbage_eta_predictor"
 description: >-
   Collects garbage truck GPS history, predicts arrival time for 有謙家園,
@@ -9,6 +9,10 @@ startup: application
 boot: auto
 init: false
 homeassistant_api: true
+ingress: true
+ingress_port: 8080
+panel_title: "Garbage ETA"
+panel_admin: false
 arch:
   - aarch64
   - armv7
@@ -19,6 +23,7 @@ ports:
 ports_description:
   8080/tcp: "Status endpoint"
 panel_icon: "mdi:trash-can-clock"
+watchdog: "http://[HOST]:[PORT:8080]/status"
 stage: experimental
 timeout: 60
 options:

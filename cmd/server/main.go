@@ -85,6 +85,7 @@ func waitForShutdown(cancel context.CancelFunc) {
 
 func startStatusServer(port string, service *reminder.Service) *http.Server {
 	mux := http.NewServeMux()
+	mux.Handle("/", reminder.NewDashboardHandler())
 	mux.Handle("/status", reminder.NewStatusHandler(service))
 
 	server := &http.Server{

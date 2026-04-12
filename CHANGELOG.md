@@ -14,3 +14,8 @@
 ## 0.2.2
 
 - Fix Home Assistant OS builds producing the wrong CPU architecture binary
+
+## 0.3.0
+
+- Add a built-in Home Assistant Ingress UI and sidebar entry
+- Show ETA, GPS, notification status, and raw `/status` JSON in the App page

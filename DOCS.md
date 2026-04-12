@@ -12,6 +12,8 @@
 3. 安裝 `Garbage ETA Predictor`
 4. 在 App 設定頁填入必要參數後啟動
 
+啟動成功後，Home Assistant 側邊欄會出現 `Garbage ETA`，可直接打開查看目前 ETA、GPS、通知狀態與原始 `/status`。
+
 ## 必填設定
 
 - `telegram_bot_token`
@@ -41,7 +43,12 @@ Home Assistant API 不需要另外填 URL 或 long-lived token，App 會透過 S
 
 ## 狀態頁
 
-App 會提供 `GET /status`，但在 Home Assistant OS 版本中，預設不直接對外開放 host port，避免和現有服務撞埠造成啟動失敗。
+App 會提供兩種狀態查看方式：
+
+- Home Assistant 側邊欄的 `Garbage ETA` Ingress UI
+- `GET /status` JSON API
+
+Home Assistant OS 版本預設不直接對外開放 host port，避免和現有服務撞埠造成啟動失敗。
 
 如果你要從外部直接打 `/status`：
 
