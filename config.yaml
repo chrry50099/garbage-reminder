@@ -21,6 +21,7 @@ ports_description:
 watchdog: "http://[HOST]:[PORT:8080]/status"
 panel_icon: "mdi:trash-can-clock"
 stage: experimental
+timeout: 60
 options:
   telegram_bot_token: ""
   telegram_chat_id: ""

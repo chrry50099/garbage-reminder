@@ -45,12 +45,12 @@ func main() {
 	alertNotifier := notifier.NewMultiSender(telegramNotifier, haNotifier)
 	service := reminder.NewService(cfg, eupfinClient, alertNotifier, telegramNotifier, localState, historyStore)
 
-	if err := service.Initialize(ctx); err != nil {
-		log.Fatalf("Startup validation failed: %v", err)
-	}
-
 	statusServer := startStatusServer(cfg.HTTPPort, service)
 	defer shutdownStatusServer(statusServer)
+
+	if err := service.Initialize(ctx); err != nil {
+		log.Printf("Startup validation failed, service will retry on scheduled checks: %v", err)
+	}
 
 	if cfg.SendTestMessageOnStart {
 		if err := service.SendStartupTestMessage(ctx); err != nil {
