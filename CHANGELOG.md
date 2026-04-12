@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.1
+
+- Change the default collector check interval from `1m` to `20s`
+
 ## 0.5.0
 
 - Add route-progress projection for ETA prediction, using Eupfin route points as a monotonic path axis
