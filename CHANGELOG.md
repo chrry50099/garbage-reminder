@@ -25,3 +25,8 @@
 - Add a HomePod Mini test broadcast panel to the App UI
 - Let the App discover media players and TTS entities from Home Assistant
 - Add backend endpoints for test message sending from the sidebar page
+
+## 0.4.1
+
+- Prefer Google Gemini TTS as the default cloud TTS choice in the App UI
+- Omit the `language` field for Gemini TTS so Chinese playback works correctly

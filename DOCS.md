@@ -55,6 +55,8 @@ App 會提供兩種狀態查看方式：
 - 選擇 HA 內可用的 TTS entity
 - 直接送出測試廣播
 
+如果你選的是 `Google Gemini TTS`，請不要手動填 `language`。Gemini 會自動偵測輸入語言，App 也會自動忽略這個欄位，避免中文播報失敗。
+
 Home Assistant OS 版本預設不直接對外開放 host port，避免和現有服務撞埠造成啟動失敗。
 
 如果你要從外部直接打 `/status`：

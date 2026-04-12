@@ -466,7 +466,7 @@ var dashboardTemplate = template.Must(template.New("dashboard").Parse(`<!DOCTYPE
             </div>
             <div class="field half">
               <label for="tts-language">語言代碼（可留空）</label>
-              <input id="tts-language" type="text" placeholder="例如：zh-TW 或 en">
+                <input id="tts-language" type="text" placeholder="Gemini 請留空；其他可填 zh-TW 或 en">
             </div>
             <div class="field">
               <label>選擇要播報的 HomePod mini</label>
@@ -581,6 +581,7 @@ var dashboardTemplate = template.Must(template.New("dashboard").Parse(`<!DOCTYPE
     function updateBroadcastButtonState() {
       const hasMessage = els.broadcastMessage.value.trim().length > 0;
       const targets = selectedTargets();
+      const isGemini = els.ttsEntity.value === "tts.google_ai_tts" || els.ttsEntity.value === "tts.google_generative_ai_tts";
       els.broadcastButton.disabled = !(hasMessage && targets.length > 0 && els.ttsEntity.value);
       if (!hasMessage) {
         els.broadcastSummary.textContent = "請先輸入測試播報內容。";
@@ -588,6 +589,8 @@ var dashboardTemplate = template.Must(template.New("dashboard").Parse(`<!DOCTYPE
         els.broadcastSummary.textContent = "請至少勾選一台要播報的 HomePod。";
       } else if (!els.ttsEntity.value) {
         els.broadcastSummary.textContent = "目前找不到可用的 TTS 引擎。";
+      } else if (isGemini) {
+        els.broadcastSummary.textContent = "Gemini TTS 會自動偵測中文，語言欄位請留空。";
       } else {
         els.broadcastSummary.textContent = "將送到 " + targets.length + " 台裝置。";
       }

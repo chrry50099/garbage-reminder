@@ -88,3 +88,28 @@ func TestSendTestBroadcastUsesTTSSpeakService(t *testing.T) {
 		t.Fatalf("unexpected second payload: %+v", requests[1])
 	}
 }
+
+func TestSendTestBroadcastOmitsLanguageForGeminiTTS(t *testing.T) {
+	var payload map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	client := NewHomeAssistant(server.URL, "token", "webhook", "garbage")
+	err := client.SendTestBroadcast(context.Background(), BroadcastRequest{
+		Message:         "請準備倒垃圾",
+		TTSEntityID:     "tts.google_ai_tts",
+		TargetEntityIDs: []string{"media_player.ke_ting"},
+		Language:        "zh-TW",
+	})
+	if err != nil {
+		t.Fatalf("SendTestBroadcast() error: %v", err)
+	}
+	if _, ok := payload["language"]; ok {
+		t.Fatalf("expected language to be omitted for Gemini TTS, got %+v", payload)
+	}
+}

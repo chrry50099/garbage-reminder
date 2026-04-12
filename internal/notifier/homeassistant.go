@@ -188,7 +188,7 @@ func (h *HomeAssistant) SendTestBroadcast(ctx context.Context, request Broadcast
 			"message":                message,
 			"cache":                  true,
 		}
-		if language := strings.TrimSpace(request.Language); language != "" {
+		if language := strings.TrimSpace(request.Language); language != "" && supportsExplicitLanguage(ttsEntityID) {
 			payload["language"] = language
 		}
 
@@ -266,7 +266,7 @@ func looksLikeHomePod(option BroadcastEntityOption) bool {
 }
 
 func preferredTTSEntity(options []BroadcastEntityOption) string {
-	preferred := []string{"tts.google_en_com", "tts.google_ai_tts"}
+	preferred := []string{"tts.google_ai_tts", "tts.google_generative_ai_tts", "tts.google_en_com"}
 	for _, entityID := range preferred {
 		for _, option := range options {
 			if option.EntityID == entityID {
@@ -286,4 +286,9 @@ func sortOptions(options []BroadcastEntityOption) {
 		right := strings.ToLower(options[j].FriendlyName + options[j].EntityID)
 		return left < right
 	})
+}
+
+func supportsExplicitLanguage(entityID string) bool {
+	value := strings.ToLower(strings.TrimSpace(entityID))
+	return value != "tts.google_ai_tts" && value != "tts.google_generative_ai_tts"
 }

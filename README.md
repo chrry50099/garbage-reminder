@@ -35,6 +35,7 @@ Home Assistant OS 版本安裝說明請看 `DOCS.md`。
 - 提供 `/status` 只讀端點，方便 Home Assistant REST sensor 或手動檢查
 - Home Assistant OS App 版本提供 Ingress UI，可從 HA 側邊欄直接查看 ETA、GPS、通知狀態
 - 可在 App UI 輸入任意測試訊息、勾選要播報的 HomePod Mini，直接觸發 HA TTS
+- 針對 Google Gemini TTS 自動避開 `language` 參數，修正中文播報失敗
 
 Home Assistant OS App 版本預設不綁定固定 host port，避免和樹梅派上其他服務撞埠。
 
