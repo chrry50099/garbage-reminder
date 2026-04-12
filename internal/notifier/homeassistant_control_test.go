@@ -112,4 +112,8 @@ func TestSendTestBroadcastOmitsLanguageForGeminiTTS(t *testing.T) {
 	if _, ok := payload["language"]; ok {
 		t.Fatalf("expected language to be omitted for Gemini TTS, got %+v", payload)
 	}
+	options, ok := payload["options"].(map[string]interface{})
+	if !ok || options["voice"] != "achernar" {
+		t.Fatalf("expected default Gemini voice achernar, got %+v", payload)
+	}
 }

@@ -57,6 +57,8 @@ App 會提供兩種狀態查看方式：
 
 如果你選的是 `Google Gemini TTS`，請不要手動填 `language`。Gemini 會自動偵測輸入語言，App 也會自動忽略這個欄位，避免中文播報失敗。
 
+如果某台 HomePod 對特定中文播報回 500，請改用 Gemini voice `achernar` 或 `leda`。目前 App 測試面板預設會使用 `achernar`。
+
 Home Assistant OS 版本預設不直接對外開放 host port，避免和現有服務撞埠造成啟動失敗。
 
 如果你要從外部直接打 `/status`：

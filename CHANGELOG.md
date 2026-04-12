@@ -30,3 +30,8 @@
 
 - Prefer Google Gemini TTS as the default cloud TTS choice in the App UI
 - Omit the `language` field for Gemini TTS so Chinese playback works correctly
+
+## 0.4.2
+
+- Add Gemini voice selection to the App UI test panel
+- Default Gemini test playback to `achernar`, which is more reliable for Chinese on the bedroom HomePod

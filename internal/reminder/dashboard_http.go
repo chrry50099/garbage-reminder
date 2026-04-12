@@ -468,6 +468,16 @@ var dashboardTemplate = template.Must(template.New("dashboard").Parse(`<!DOCTYPE
               <label for="tts-language">語言代碼（可留空）</label>
                 <input id="tts-language" type="text" placeholder="Gemini 請留空；其他可填 zh-TW 或 en">
             </div>
+            <div class="field half">
+              <label for="tts-voice">Gemini 聲線</label>
+              <select id="tts-voice">
+                <option value="">自動（Gemini 預設用 achernar）</option>
+                <option value="achernar">achernar</option>
+                <option value="leda">leda</option>
+                <option value="kore">kore</option>
+                <option value="zephyr">zephyr</option>
+              </select>
+            </div>
             <div class="field">
               <label>選擇要播報的 HomePod mini</label>
               <div class="device-list" id="device-list">
@@ -519,6 +529,7 @@ var dashboardTemplate = template.Must(template.New("dashboard").Parse(`<!DOCTYPE
       broadcastMessage: document.getElementById("broadcast-message"),
       ttsEntity: document.getElementById("tts-entity"),
       ttsLanguage: document.getElementById("tts-language"),
+      ttsVoice: document.getElementById("tts-voice"),
       deviceList: document.getElementById("device-list"),
       broadcastButton: document.getElementById("broadcast-button"),
       broadcastSummary: document.getElementById("broadcast-summary"),
@@ -590,7 +601,8 @@ var dashboardTemplate = template.Must(template.New("dashboard").Parse(`<!DOCTYPE
       } else if (!els.ttsEntity.value) {
         els.broadcastSummary.textContent = "目前找不到可用的 TTS 引擎。";
       } else if (isGemini) {
-        els.broadcastSummary.textContent = "Gemini TTS 會自動偵測中文，語言欄位請留空。";
+        const voice = els.ttsVoice.value || "achernar";
+        els.broadcastSummary.textContent = "Gemini TTS 會自動偵測中文，語言欄位請留空；目前聲線為 " + voice + "。";
       } else {
         els.broadcastSummary.textContent = "將送到 " + targets.length + " 台裝置。";
       }
@@ -746,7 +758,8 @@ var dashboardTemplate = template.Must(template.New("dashboard").Parse(`<!DOCTYPE
         message: els.broadcastMessage.value.trim(),
         target_entity_ids: selectedTargets(),
         tts_entity_id: els.ttsEntity.value,
-        language: els.ttsLanguage.value.trim()
+        language: els.ttsLanguage.value.trim(),
+        voice: els.ttsVoice.value
       };
 
       els.broadcastButton.disabled = true;
@@ -775,6 +788,7 @@ var dashboardTemplate = template.Must(template.New("dashboard").Parse(`<!DOCTYPE
 
     els.broadcastMessage.addEventListener("input", updateBroadcastButtonState);
     els.ttsEntity.addEventListener("change", updateBroadcastButtonState);
+    els.ttsVoice.addEventListener("change", updateBroadcastButtonState);
     els.broadcastButton.addEventListener("click", submitBroadcast);
 
     refreshStatus();

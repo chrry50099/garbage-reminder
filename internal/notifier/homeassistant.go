@@ -42,6 +42,7 @@ type BroadcastRequest struct {
 	TargetEntityIDs []string `json:"target_entity_ids"`
 	TTSEntityID     string   `json:"tts_entity_id,omitempty"`
 	Language        string   `json:"language,omitempty"`
+	Voice           string   `json:"voice,omitempty"`
 }
 
 type haEntityState struct {
@@ -191,6 +192,11 @@ func (h *HomeAssistant) SendTestBroadcast(ctx context.Context, request Broadcast
 		if language := strings.TrimSpace(request.Language); language != "" && supportsExplicitLanguage(ttsEntityID) {
 			payload["language"] = language
 		}
+		if voice := resolveVoiceOption(ttsEntityID, request.Voice); voice != "" {
+			payload["options"] = map[string]interface{}{
+				"voice": voice,
+			}
+		}
 
 		body, err := json.Marshal(payload)
 		if err != nil {
@@ -291,4 +297,17 @@ func sortOptions(options []BroadcastEntityOption) {
 func supportsExplicitLanguage(entityID string) bool {
 	value := strings.ToLower(strings.TrimSpace(entityID))
 	return value != "tts.google_ai_tts" && value != "tts.google_generative_ai_tts"
+}
+
+func resolveVoiceOption(entityID, requestedVoice string) string {
+	value := strings.TrimSpace(requestedVoice)
+	switch strings.ToLower(strings.TrimSpace(entityID)) {
+	case "tts.google_ai_tts", "tts.google_generative_ai_tts":
+		if value != "" {
+			return value
+		}
+		return "achernar"
+	default:
+		return ""
+	}
 }
