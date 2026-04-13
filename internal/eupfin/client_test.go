@@ -27,6 +27,8 @@ func TestResolveTargetStopParsesExpectedRoute(t *testing.T) {
 				{
 					"Route_ID": 461,
 					"RouteName": "雙溪線(每周一、二、四、五資源回收)",
+					"CarUnicode": "68715",
+					"Car_Number": "KEG-5915",
 					"Points": [
 						{
 							"Point_ID": 27,
@@ -62,13 +64,18 @@ func TestResolveTargetStopParsesExpectedRoute(t *testing.T) {
 	if target.GISX != 121.02032 || target.GISY != 24.748448 {
 		t.Fatalf("unexpected coordinates: %f,%f", target.GISX, target.GISY)
 	}
+	if target.CarUnicode != "68715" || target.CarNumber != "KEG-5915" {
+		t.Fatalf("unexpected car identity: %+v", target)
+	}
 }
 
 func TestFindTargetStopRejectsMismatchedName(t *testing.T) {
 	routes := []Route{
 		{
-			RouteID:   461,
-			RouteName: "雙溪線",
+			RouteID:    461,
+			RouteName:  "雙溪線",
+			CarUnicode: "68715",
+			CarNumber:  "KEG-5915",
 			Points: []Point{
 				{
 					PointID:   27,

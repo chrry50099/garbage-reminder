@@ -14,6 +14,8 @@ type CachedTarget struct {
 	TeamID        int       `json:"team_id"`
 	RouteID       int       `json:"route_id"`
 	RouteName     string    `json:"route_name"`
+	CarUnicode    string    `json:"car_unicode,omitempty"`
+	CarNumber     string    `json:"car_number,omitempty"`
 	PointID       int       `json:"point_id"`
 	PointSeq      int       `json:"point_seq"`
 	PointName     string    `json:"point_name"`

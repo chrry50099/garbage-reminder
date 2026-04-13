@@ -73,8 +73,14 @@ type PointDetail struct {
 type CarStatus struct {
 	RouteID    int     `json:"Route_ID"`
 	CarUnicode string  `json:"Car_Unicode"`
+	CarNumber  string  `json:"Car_Number"`
+	CarDriver  string  `json:"Car_Driver"`
 	GISX       float64 `json:"GISX"`
 	GISY       float64 `json:"GISY"`
+	LogGISX    float64 `json:"Log_GISX"`
+	LogGISY    float64 `json:"Log_GISY"`
+	LogDTime   string  `json:"Log_DTime"`
+	LogDirect  float64 `json:"Log_Direct"`
 	UseState   int     `json:"UseState"`
 }
 
@@ -95,6 +101,8 @@ type TargetStop struct {
 	TeamID        int
 	RouteID       int
 	RouteName     string
+	CarUnicode    string
+	CarNumber     string
 	PointID       int
 	PointSeq      int
 	PointName     string
@@ -184,6 +192,8 @@ func FindTargetStop(routes []Route, routeID, pointSeq int, pointName string) (*T
 			return &TargetStop{
 				RouteID:       route.RouteID,
 				RouteName:     route.RouteName,
+				CarUnicode:    route.CarUnicode,
+				CarNumber:     route.CarNumber,
 				PointID:       point.PointID,
 				PointSeq:      point.Seq,
 				PointName:     point.PointName,

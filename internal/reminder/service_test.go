@@ -55,7 +55,7 @@ func TestCheckOnceUsesHistoricalPredictionAndSendsAlert(t *testing.T) {
 		target:   baseTarget(),
 		routes:   []eupfin.Route{baseRoute()},
 		cars: []eupfin.CarStatus{
-			{RouteID: 461, GISX: 121.013500, GISY: 24.745500},
+			{CarUnicode: "68715", LogGISX: 121.013500, LogGISY: 24.745500},
 		},
 	}, alerts, &fakeNotifier{}, store, historyStore, nil)
 	service.now = func() time.Time { return now }
@@ -158,7 +158,7 @@ func TestCheckOnceMarksRunCompletedOnArrival(t *testing.T) {
 		target:   baseTarget(),
 		routes:   []eupfin.Route{baseRoute()},
 		cars: []eupfin.CarStatus{
-			{RouteID: 461, GISX: 121.020320, GISY: 24.748448},
+			{CarUnicode: "68715", LogGISX: 121.020320, LogGISY: 24.748448},
 		},
 	}, &fakeNotifier{}, &fakeNotifier{}, newFakeStore(), historyStore, nil)
 	service.now = func() time.Time {
@@ -195,6 +195,41 @@ func TestSendStartupTestMessageUsesStartupNotifier(t *testing.T) {
 	}
 	if !strings.Contains(startup.messages[0], "收集時窗：19:00-21:30") {
 		t.Fatalf("unexpected startup message: %s", startup.messages[0])
+	}
+}
+
+func TestCheckOnceUsesLogCoordinatesWhenLegacyGISFieldsAreEmpty(t *testing.T) {
+	cfg := testConfig()
+	historyStore := newFakeHistoryStore()
+	service := NewService(cfg, &fakeEupfinClient{
+		district: baseDistrict(),
+		target:   baseTarget(),
+		routes:   []eupfin.Route{baseRoute()},
+		cars: []eupfin.CarStatus{
+			{
+				CarUnicode: "68715",
+				CarNumber:  "KEG-5915",
+				LogGISX:    121.013500,
+				LogGISY:    24.745500,
+			},
+		},
+	}, &fakeNotifier{}, &fakeNotifier{}, newFakeStore(), historyStore, nil)
+	service.now = func() time.Time {
+		return time.Date(2026, 4, 13, 20, 5, 0, 0, time.FixedZone("CST", 8*3600))
+	}
+
+	if err := service.CheckOnce(context.Background()); err != nil {
+		t.Fatalf("CheckOnce() returned error: %v", err)
+	}
+
+	if len(historyStore.samples) != 1 {
+		t.Fatalf("expected one inserted sample, got %d", len(historyStore.samples))
+	}
+	if !historyStore.samples[0].GPSAvailable {
+		t.Fatalf("expected sample to use GPS from log coordinates, got %+v", historyStore.samples[0])
+	}
+	if historyStore.samples[0].TruckLat != 24.745500 || historyStore.samples[0].TruckLng != 121.013500 {
+		t.Fatalf("unexpected truck coordinates: %+v", historyStore.samples[0])
 	}
 }
 
@@ -418,6 +453,8 @@ func baseTarget() *eupfin.TargetStop {
 		TeamID:        5005609,
 		RouteID:       461,
 		RouteName:     "雙溪線(每周一、二、四、五資源回收)",
+		CarUnicode:    "68715",
+		CarNumber:     "KEG-5915",
 		PointID:       27,
 		PointSeq:      27,
 		PointName:     "有謙家園",
@@ -429,8 +466,10 @@ func baseTarget() *eupfin.TargetStop {
 
 func baseRoute() eupfin.Route {
 	return eupfin.Route{
-		RouteID:   461,
-		RouteName: "雙溪線(每周一、二、四、五資源回收)",
+		RouteID:    461,
+		RouteName:  "雙溪線(每周一、二、四、五資源回收)",
+		CarUnicode: "68715",
+		CarNumber:  "KEG-5915",
 		Points: []eupfin.Point{
 			{PointID: 1, Seq: 1, PointName: "起點", GISX: 121.010000, GISY: 24.740000},
 			{PointID: 10, Seq: 10, PointName: "中途", GISX: 121.011111, GISY: 24.744444},

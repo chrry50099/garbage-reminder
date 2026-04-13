@@ -429,6 +429,8 @@ func (s *Service) refreshTarget(ctx context.Context) (*state.CachedTarget, error
 		TeamID:        target.TeamID,
 		RouteID:       target.RouteID,
 		RouteName:     target.RouteName,
+		CarUnicode:    target.CarUnicode,
+		CarNumber:     target.CarNumber,
 		PointID:       target.PointID,
 		PointSeq:      target.PointSeq,
 		PointName:     target.PointName,
@@ -471,12 +473,11 @@ func (s *Service) collectLiveObservation(ctx context.Context, target *state.Cach
 
 	cars, carsErr := s.client.GetCarStatusGarbage(ctx, target.CustID, target.TeamID)
 	if carsErr == nil {
-		for _, car := range cars {
-			if car.RouteID == target.RouteID && car.GISY != 0 && car.GISX != 0 {
+		if car, ok := selectTargetCar(cars, target); ok {
+			if lat, lng, ok := carCoordinates(car); ok {
 				result.observation.GPSAvailable = true
-				result.observation.TruckLat = car.GISY
-				result.observation.TruckLng = car.GISX
-				break
+				result.observation.TruckLat = lat
+				result.observation.TruckLng = lng
 			}
 		}
 	}
@@ -692,6 +693,38 @@ func findTargetPointStatus(statuses []eupfin.RouteStatus, routeID, pointID int) 
 		}
 	}
 	return nil
+}
+
+func selectTargetCar(cars []eupfin.CarStatus, target *state.CachedTarget) (eupfin.CarStatus, bool) {
+	if target == nil {
+		return eupfin.CarStatus{}, false
+	}
+
+	if target.CarUnicode != "" {
+		for _, car := range cars {
+			if car.CarUnicode == target.CarUnicode {
+				return car, true
+			}
+		}
+	}
+
+	for _, car := range cars {
+		if car.RouteID == target.RouteID {
+			return car, true
+		}
+	}
+
+	return eupfin.CarStatus{}, false
+}
+
+func carCoordinates(car eupfin.CarStatus) (float64, float64, bool) {
+	if car.LogGISY != 0 && car.LogGISX != 0 {
+		return car.LogGISY, car.LogGISX, true
+	}
+	if car.GISY != 0 && car.GISX != 0 {
+		return car.GISY, car.GISX, true
+	}
+	return 0, 0, false
 }
 
 func detectArrival(observation history.Observation, target *state.CachedTarget, arrivalRadiusMeters float64) string {

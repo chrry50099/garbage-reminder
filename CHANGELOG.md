@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.3
+
+- Fix garbage truck GPS collection to use Eupfin `Log_GISX` / `Log_GISY` when `GISX` / `GISY` are empty
+- Match the live truck by `Car_Unicode` first, then fall back to `Route_ID`
+- Preserve the route's `CarUnicode` and `Car_Number` in cached target state so Home Assistant can keep tracking the correct truck after refreshes
+
 ## 0.5.1
 
 - Change the default collector check interval from `1m` to `20s`
