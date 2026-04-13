@@ -37,6 +37,7 @@ type localStore interface {
 	GetCachedTarget() *state.CachedTarget
 	HasDelivery(deliveryKey string) bool
 	RecordDelivery(deliveryKey string, record state.DeliveryRecord) error
+	ListDeliveriesForDate(serviceDate string) []state.DeliveryRecord
 }
 
 type historyStore interface {
@@ -47,6 +48,8 @@ type historyStore interface {
 	PruneBefore(cutoff time.Time) error
 	ListHistoricalSamples(weekday time.Weekday, routeID, pointID int, since time.Time) ([]history.HistoricalSample, int, error)
 	ListRecentRunSamples(runID string, limit int) ([]history.RecentSample, error)
+	ListServiceDates(limit int) ([]string, error)
+	ListSamplesByServiceDate(serviceDate string) ([]history.Sample, error)
 }
 
 type Service struct {
@@ -56,6 +59,7 @@ type Service struct {
 	startupNotifier messageSender
 	store           localStore
 	history         historyStore
+	collectorLog    *CollectorLogger
 	now             func() time.Time
 
 	statusMu sync.RWMutex
@@ -84,6 +88,10 @@ type StatusSnapshot struct {
 	APIWaitingTime   *int                `json:"api_waiting_time,omitempty"`
 	Prediction       *history.Prediction `json:"prediction,omitempty"`
 	NotifiedOffsets  []int               `json:"notified_offsets,omitempty"`
+	TodaySampleCount int                 `json:"today_sample_count"`
+	TodayGPSSamples  int                 `json:"today_gps_sample_count"`
+	SharedDataPath   string              `json:"shared_data_path,omitempty"`
+	CheckInterval    string              `json:"check_interval,omitempty"`
 	Message          string              `json:"message,omitempty"`
 	LastCollectedAt  *time.Time          `json:"last_collected_at,omitempty"`
 }
@@ -102,6 +110,7 @@ func NewService(
 	startupNotifier messageSender,
 	store localStore,
 	historyStore historyStore,
+	collectorLog *CollectorLogger,
 ) *Service {
 	offsets := append([]int(nil), cfg.AlertOffsets...)
 	slices.Sort(offsets)
@@ -115,9 +124,12 @@ func NewService(
 		startupNotifier: startupNotifier,
 		store:           store,
 		history:         historyStore,
+		collectorLog:    collectorLog,
 		now:             utils.NowInTaiwan,
 		status: StatusSnapshot{
 			CollectionWindow: fmt.Sprintf("%s-%s", cfg.CollectionStart, cfg.CollectionEnd),
+			SharedDataPath:   cfg.SharedDataDir,
+			CheckInterval:    cfg.CheckInterval.String(),
 			Message:          "service starting",
 		},
 	}
@@ -199,44 +211,47 @@ func (s *Service) CheckOnce(ctx context.Context) error {
 	serviceDate := now.Format("2006-01-02")
 
 	if err := s.history.PruneBefore(now.AddDate(0, 0, -7*s.cfg.HistoryWeeks)); err != nil {
+		s.logCollectorError("prune_history", serviceDate, now, err)
 		return err
 	}
 
 	if !s.isTargetDay(now.Weekday()) {
-		s.updateStatus(StatusSnapshot{
+		s.updateStatus(s.updateStatusWithDayCounts(StatusSnapshot{
 			UpdatedAt:        now,
 			Active:           false,
 			ServiceDate:      serviceDate,
 			Weekday:          now.Weekday().String(),
 			CollectionWindow: fmt.Sprintf("%s-%s", s.cfg.CollectionStart, s.cfg.CollectionEnd),
 			Message:          "inactive weekday",
-		})
+		}, serviceDate))
 		return nil
 	}
 
 	if !s.isWithinCollectionWindow(now) {
-		s.updateStatus(StatusSnapshot{
+		s.updateStatus(s.updateStatusWithDayCounts(StatusSnapshot{
 			UpdatedAt:        now,
 			Active:           false,
 			ServiceDate:      serviceDate,
 			Weekday:          now.Weekday().String(),
 			CollectionWindow: fmt.Sprintf("%s-%s", s.cfg.CollectionStart, s.cfg.CollectionEnd),
 			Message:          "outside collection window",
-		})
+		}, serviceDate))
 		return nil
 	}
 
 	target, err := s.resolveTarget(ctx)
 	if err != nil {
+		s.logCollectorError("resolve_target", serviceDate, now, err)
 		return err
 	}
 
 	run, err := s.history.EnsureRun(serviceDate, now.Weekday(), target.RouteID, target.PointID, target.GISY, target.GISX, now)
 	if err != nil {
+		s.logCollectorError("ensure_run", serviceDate, now, err)
 		return fmt.Errorf("ensure history run: %w", err)
 	}
 	if run != nil && run.Status == "completed" {
-		s.updateStatus(StatusSnapshot{
+		s.updateStatus(s.updateStatusWithDayCounts(StatusSnapshot{
 			UpdatedAt:        now,
 			Active:           false,
 			ServiceDate:      serviceDate,
@@ -250,12 +265,13 @@ func (s *Service) CheckOnce(ctx context.Context) error {
 			TargetLng:        target.GISX,
 			NotifiedOffsets:  s.notifiedOffsets(serviceDate),
 			Message:          "run already completed",
-		})
+		}, serviceDate))
 		return nil
 	}
 
 	live, err := s.collectLiveObservation(ctx, target, now)
 	if err != nil {
+		s.logCollectorError("collect_live_observation", serviceDate, now, err)
 		return err
 	}
 
@@ -277,12 +293,14 @@ func (s *Service) CheckOnce(ctx context.Context) error {
 		CollectedAt:         now,
 	}
 	if err := s.history.InsertSample(sample); err != nil {
+		s.logCollectorError("insert_sample", serviceDate, now, err)
 		return fmt.Errorf("insert historical sample: %w", err)
 	}
 
 	runStatus := "collecting"
 	if live.arrivalSource != "" {
 		if err := s.history.MarkRunCompleted(serviceDate, now, live.arrivalSource); err != nil {
+			s.logCollectorError("mark_run_completed", serviceDate, now, err)
 			return fmt.Errorf("mark run completed: %w", err)
 		}
 		runStatus = "completed"
@@ -295,6 +313,7 @@ func (s *Service) CheckOnce(ctx context.Context) error {
 		now.AddDate(0, 0, -7*s.cfg.HistoryWeeks),
 	)
 	if err != nil {
+		s.logCollectorError("list_historical_samples", serviceDate, now, err)
 		return fmt.Errorf("load historical samples: %w", err)
 	}
 
@@ -310,12 +329,15 @@ func (s *Service) CheckOnce(ctx context.Context) error {
 
 	if prediction != nil {
 		if err := s.dispatchNotifications(ctx, serviceDate, now, target, live, prediction); err != nil {
+			s.logCollectorError("dispatch_notifications", serviceDate, now, err)
 			return err
 		}
 	}
 
+	s.logCollectorSample(serviceDate, now, sample, prediction, runStatus)
+
 	lastCollectedAt := now
-	s.updateStatus(StatusSnapshot{
+	snapshot := StatusSnapshot{
 		UpdatedAt:        now,
 		Active:           true,
 		ServiceDate:      serviceDate,
@@ -336,7 +358,8 @@ func (s *Service) CheckOnce(ctx context.Context) error {
 		NotifiedOffsets:  s.notifiedOffsets(serviceDate),
 		LastCollectedAt:  &lastCollectedAt,
 		Message:          s.statusMessage(runStatus, prediction),
-	})
+	}
+	s.updateStatus(s.updateStatusWithDayCounts(snapshot, serviceDate))
 
 	return nil
 }
@@ -644,6 +667,15 @@ func (s *Service) notifiedOffsets(serviceDate string) []int {
 func (s *Service) updateStatus(snapshot StatusSnapshot) {
 	s.statusMu.Lock()
 	defer s.statusMu.Unlock()
+	if snapshot.CollectionWindow == "" {
+		snapshot.CollectionWindow = fmt.Sprintf("%s-%s", s.cfg.CollectionStart, s.cfg.CollectionEnd)
+	}
+	if snapshot.SharedDataPath == "" {
+		snapshot.SharedDataPath = s.cfg.SharedDataDir
+	}
+	if snapshot.CheckInterval == "" {
+		snapshot.CheckInterval = s.cfg.CheckInterval.String()
+	}
 	s.status = snapshot
 }
 

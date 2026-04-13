@@ -129,6 +129,19 @@ func (s *LocalStore) RecordDelivery(deliveryKey string, record DeliveryRecord) e
 	return s.persistLocked()
 }
 
+func (s *LocalStore) ListDeliveriesForDate(serviceDate string) []DeliveryRecord {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	results := make([]DeliveryRecord, 0)
+	for _, record := range s.state.Deliveries {
+		if record.ScheduledDate == serviceDate {
+			results = append(results, record)
+		}
+	}
+	return results
+}
+
 func (s *LocalStore) persistLocked() error {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
 		return fmt.Errorf("create state directory: %w", err)

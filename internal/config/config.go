@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -20,8 +21,11 @@ type Config struct {
 	TelegramChatID   string
 
 	EupfinBaseURL          string
+	SharedDataDir          string
 	StateFile              string
 	DatabaseFile           string
+	CollectorLogFile       string
+	ExportsDir             string
 	CheckInterval          time.Duration
 	SendTestMessageOnStart bool
 	HTTPPort               string
@@ -113,8 +117,6 @@ func Load() (*Config, error) {
 		TelegramChatID:   strings.TrimSpace(os.Getenv("TELEGRAM_CHAT_ID")),
 
 		EupfinBaseURL:          getEnvOrDefault("EUPFIN_BASE_URL", defaultEupfinBaseURL),
-		StateFile:              getEnvOrDefault("STATE_FILE", "data/state.json"),
-		DatabaseFile:           getEnvOrDefault("DATABASE_FILE", "data/history.db"),
 		CheckInterval:          checkInterval,
 		SendTestMessageOnStart: parseBoolEnv("SEND_TEST_MESSAGE_ON_START", false),
 		HTTPPort:               getEnvOrDefault("PORT", "8080"),
@@ -141,6 +143,11 @@ func Load() (*Config, error) {
 		HANotifyMode: strings.TrimSpace(os.Getenv("HA_NOTIFY_MODE")),
 		HATTSTarget:  strings.TrimSpace(os.Getenv("HA_TTS_TARGET")),
 	}
+	cfg.SharedDataDir = getEnvOrDefault("SHARED_DATA_DIR", "/share/garbage_eta")
+	cfg.StateFile = getEnvOrDefault("STATE_FILE", filepath.Join(cfg.SharedDataDir, "state.json"))
+	cfg.DatabaseFile = getEnvOrDefault("DATABASE_FILE", filepath.Join(cfg.SharedDataDir, "history.db"))
+	cfg.CollectorLogFile = getEnvOrDefault("COLLECTOR_LOG_FILE", filepath.Join(cfg.SharedDataDir, "logs", "collector.log"))
+	cfg.ExportsDir = getEnvOrDefault("EXPORTS_DIR", filepath.Join(cfg.SharedDataDir, "exports"))
 
 	cfg.TargetCustID, err = parseRequiredIntEnv("TARGET_CUST_ID")
 	if err != nil {
@@ -185,6 +192,9 @@ func (c *Config) Validate() error {
 	if c.HABaseURL == "" {
 		missing = append(missing, "HA_BASE_URL")
 	}
+	if c.SharedDataDir == "" {
+		missing = append(missing, "SHARED_DATA_DIR")
+	}
 	if c.HAToken == "" {
 		missing = append(missing, "HA_TOKEN")
 	}
@@ -225,6 +235,18 @@ func (c *Config) Validate() error {
 
 	if c.CheckInterval <= 0 {
 		return fmt.Errorf("CHECK_INTERVAL must be greater than 0")
+	}
+	if strings.TrimSpace(c.StateFile) == "" {
+		return fmt.Errorf("STATE_FILE is required")
+	}
+	if strings.TrimSpace(c.DatabaseFile) == "" {
+		return fmt.Errorf("DATABASE_FILE is required")
+	}
+	if strings.TrimSpace(c.CollectorLogFile) == "" {
+		return fmt.Errorf("COLLECTOR_LOG_FILE is required")
+	}
+	if strings.TrimSpace(c.ExportsDir) == "" {
+		return fmt.Errorf("EXPORTS_DIR is required")
 	}
 	if c.HistoryWeeks <= 0 {
 		return fmt.Errorf("HISTORY_WEEKS must be greater than 0")

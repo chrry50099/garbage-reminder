@@ -384,6 +384,118 @@ func (s *SQLiteStore) ListRecentRunSamples(runID string, limit int) ([]RecentSam
 	return recent, nil
 }
 
+func (s *SQLiteStore) ListServiceDates(limit int) ([]string, error) {
+	query := `
+		SELECT service_date
+		FROM runs
+		ORDER BY service_date DESC
+	`
+	args := []any{}
+	if limit > 0 {
+		query += ` LIMIT ?`
+		args = append(args, limit)
+	}
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list service dates: %w", err)
+	}
+	defer rows.Close()
+
+	dates := make([]string, 0)
+	for rows.Next() {
+		var serviceDate string
+		if err := rows.Scan(&serviceDate); err != nil {
+			return nil, fmt.Errorf("scan service date: %w", err)
+		}
+		dates = append(dates, serviceDate)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate service dates: %w", err)
+	}
+	return dates, nil
+}
+
+func (s *SQLiteStore) ListSamplesByServiceDate(serviceDate string) ([]Sample, error) {
+	rows, err := s.db.Query(`
+		SELECT run_id, service_date, weekday, route_id, point_id, truck_lat, truck_lng, gps_available,
+		       api_estimated_minutes, api_estimated_text, api_waiting_time,
+		       progress_meters, segment_index, lateral_offset_meters, collected_at
+		FROM samples
+		WHERE service_date = ?
+		ORDER BY collected_at ASC
+	`, serviceDate)
+	if err != nil {
+		return nil, fmt.Errorf("list samples by service date: %w", err)
+	}
+	defer rows.Close()
+
+	samples := make([]Sample, 0)
+	for rows.Next() {
+		var sample Sample
+		var weekday int
+		var gpsAvailable int
+		var estimatedMinutes sql.NullInt64
+		var waitingTime sql.NullInt64
+		var progress sql.NullFloat64
+		var segment sql.NullInt64
+		var lateral sql.NullFloat64
+		var collectedAt string
+		if err := rows.Scan(
+			&sample.RunID,
+			&sample.ServiceDate,
+			&weekday,
+			&sample.RouteID,
+			&sample.PointID,
+			&sample.TruckLat,
+			&sample.TruckLng,
+			&gpsAvailable,
+			&estimatedMinutes,
+			&sample.APIEstimatedText,
+			&waitingTime,
+			&progress,
+			&segment,
+			&lateral,
+			&collectedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan sample by service date: %w", err)
+		}
+		sample.Weekday = time.Weekday(weekday)
+		sample.GPSAvailable = gpsAvailable == 1
+		parsedCollectedAt, err := time.Parse(time.RFC3339, collectedAt)
+		if err != nil {
+			return nil, fmt.Errorf("parse sample collected_at: %w", err)
+		}
+		sample.CollectedAt = parsedCollectedAt
+		if estimatedMinutes.Valid {
+			value := int(estimatedMinutes.Int64)
+			sample.APIEstimatedMinutes = &value
+		}
+		if waitingTime.Valid {
+			value := int(waitingTime.Int64)
+			sample.APIWaitingTime = &value
+		}
+		if progress.Valid {
+			value := progress.Float64
+			sample.ProgressMeters = &value
+		}
+		if segment.Valid {
+			value := int(segment.Int64)
+			sample.SegmentIndex = &value
+		}
+		if lateral.Valid {
+			value := lateral.Float64
+			sample.LateralOffsetMeters = &value
+		}
+		samples = append(samples, sample)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate samples by service date: %w", err)
+	}
+	return samples, nil
+}
+
 func (s *SQLiteStore) ensureSchema() error {
 	schema := `
 CREATE TABLE IF NOT EXISTS runs (

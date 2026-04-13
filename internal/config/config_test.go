@@ -1,6 +1,7 @@
 package config
 
 import (
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -59,6 +60,15 @@ func TestLoadParsesCollectionDefaults(t *testing.T) {
 	}
 	if cfg.CheckInterval != 20*time.Second {
 		t.Fatalf("unexpected default check interval: %s", cfg.CheckInterval)
+	}
+	if cfg.SharedDataDir != "/share/garbage_eta" {
+		t.Fatalf("unexpected shared data dir: %s", cfg.SharedDataDir)
+	}
+	if cfg.StateFile != filepath.Join("/share/garbage_eta", "state.json") || cfg.DatabaseFile != filepath.Join("/share/garbage_eta", "history.db") {
+		t.Fatalf("unexpected shared file defaults: state=%s db=%s", cfg.StateFile, cfg.DatabaseFile)
+	}
+	if cfg.CollectorLogFile != filepath.Join("/share/garbage_eta", "logs", "collector.log") || cfg.ExportsDir != filepath.Join("/share/garbage_eta", "exports") {
+		t.Fatalf("unexpected export defaults: log=%s exports=%s", cfg.CollectorLogFile, cfg.ExportsDir)
 	}
 	if cfg.CollectionStart != "19:00" || cfg.CollectionEnd != "21:30" {
 		t.Fatalf("unexpected collection window: %s-%s", cfg.CollectionStart, cfg.CollectionEnd)
@@ -119,8 +129,11 @@ func setRequiredEnv(t *testing.T) {
 	t.Setenv("CHECK_INTERVAL", "")
 	t.Setenv("SEND_TEST_MESSAGE_ON_START", "")
 	t.Setenv("EUPFIN_BASE_URL", "")
+	t.Setenv("SHARED_DATA_DIR", "")
 	t.Setenv("STATE_FILE", "")
 	t.Setenv("DATABASE_FILE", "")
+	t.Setenv("COLLECTOR_LOG_FILE", "")
+	t.Setenv("EXPORTS_DIR", "")
 	t.Setenv("COLLECTION_START", "")
 	t.Setenv("COLLECTION_END", "")
 	t.Setenv("HISTORY_WEEKS", "")
@@ -158,8 +171,11 @@ func setRequiredEnvWithoutHA(t *testing.T) {
 	t.Setenv("CHECK_INTERVAL", "")
 	t.Setenv("SEND_TEST_MESSAGE_ON_START", "")
 	t.Setenv("EUPFIN_BASE_URL", "")
+	t.Setenv("SHARED_DATA_DIR", "")
 	t.Setenv("STATE_FILE", "")
 	t.Setenv("DATABASE_FILE", "")
+	t.Setenv("COLLECTOR_LOG_FILE", "")
+	t.Setenv("EXPORTS_DIR", "")
 	t.Setenv("COLLECTION_START", "")
 	t.Setenv("COLLECTION_END", "")
 	t.Setenv("HISTORY_WEEKS", "")

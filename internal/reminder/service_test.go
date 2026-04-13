@@ -3,6 +3,8 @@ package reminder
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -15,7 +17,7 @@ import (
 
 func TestCheckOnceSkipsOutsideCollectionWindow(t *testing.T) {
 	cfg := testConfig()
-	service := NewService(cfg, &fakeEupfinClient{}, &fakeNotifier{}, &fakeNotifier{}, newFakeStore(), newFakeHistoryStore())
+	service := NewService(cfg, &fakeEupfinClient{}, &fakeNotifier{}, &fakeNotifier{}, newFakeStore(), newFakeHistoryStore(), nil)
 	service.now = func() time.Time {
 		return time.Date(2026, 4, 13, 18, 59, 0, 0, time.FixedZone("CST", 8*3600))
 	}
@@ -55,7 +57,7 @@ func TestCheckOnceUsesHistoricalPredictionAndSendsAlert(t *testing.T) {
 		cars: []eupfin.CarStatus{
 			{RouteID: 461, GISX: 121.013500, GISY: 24.745500},
 		},
-	}, alerts, &fakeNotifier{}, store, historyStore)
+	}, alerts, &fakeNotifier{}, store, historyStore, nil)
 	service.now = func() time.Time { return now }
 
 	if err := service.CheckOnce(context.Background()); err != nil {
@@ -95,7 +97,7 @@ func TestCheckOnceFallsBackToAPIWhenHistoryUnavailable(t *testing.T) {
 				},
 			},
 		},
-	}, alerts, &fakeNotifier{}, newFakeStore(), newFakeHistoryStore())
+	}, alerts, &fakeNotifier{}, newFakeStore(), newFakeHistoryStore(), nil)
 	service.now = func() time.Time {
 		return time.Date(2026, 4, 13, 20, 22, 0, 0, time.FixedZone("CST", 8*3600))
 	}
@@ -131,7 +133,7 @@ func TestCheckOnceFallsBackToAPIWhenRouteShapeUnavailable(t *testing.T) {
 				},
 			},
 		},
-	}, alerts, &fakeNotifier{}, newFakeStore(), newFakeHistoryStore())
+	}, alerts, &fakeNotifier{}, newFakeStore(), newFakeHistoryStore(), nil)
 	service.now = func() time.Time {
 		return time.Date(2026, 4, 13, 20, 22, 0, 0, time.FixedZone("CST", 8*3600))
 	}
@@ -158,7 +160,7 @@ func TestCheckOnceMarksRunCompletedOnArrival(t *testing.T) {
 		cars: []eupfin.CarStatus{
 			{RouteID: 461, GISX: 121.020320, GISY: 24.748448},
 		},
-	}, &fakeNotifier{}, &fakeNotifier{}, newFakeStore(), historyStore)
+	}, &fakeNotifier{}, &fakeNotifier{}, newFakeStore(), historyStore, nil)
 	service.now = func() time.Time {
 		return time.Date(2026, 4, 13, 20, 29, 0, 0, time.FixedZone("CST", 8*3600))
 	}
@@ -183,7 +185,7 @@ func TestSendStartupTestMessageUsesStartupNotifier(t *testing.T) {
 		district: baseDistrict(),
 		target:   baseTarget(),
 		routes:   []eupfin.Route{baseRoute()},
-	}, &fakeNotifier{}, startup, newFakeStore(), newFakeHistoryStore())
+	}, &fakeNotifier{}, startup, newFakeStore(), newFakeHistoryStore(), nil)
 
 	if err := service.SendStartupTestMessage(context.Background()); err != nil {
 		t.Fatalf("SendStartupTestMessage() returned error: %v", err)
@@ -276,6 +278,16 @@ func (f *fakeStore) RecordDelivery(deliveryKey string, record state.DeliveryReco
 	return nil
 }
 
+func (f *fakeStore) ListDeliveriesForDate(serviceDate string) []state.DeliveryRecord {
+	results := make([]state.DeliveryRecord, 0)
+	for _, record := range f.deliveries {
+		if record.ScheduledDate == serviceDate {
+			results = append(results, record)
+		}
+	}
+	return results
+}
+
 type fakeHistoryStore struct {
 	runs              map[string]*history.Run
 	samples           []history.Sample
@@ -341,13 +353,35 @@ func (f *fakeHistoryStore) ListRecentRunSamples(string, int) ([]history.RecentSa
 	return append([]history.RecentSample(nil), f.recentSamples...), nil
 }
 
+func (f *fakeHistoryStore) ListServiceDates(limit int) ([]string, error) {
+	results := make([]string, 0, len(f.runs))
+	for serviceDate := range f.runs {
+		results = append(results, serviceDate)
+	}
+	return results, nil
+}
+
+func (f *fakeHistoryStore) ListSamplesByServiceDate(serviceDate string) ([]history.Sample, error) {
+	results := make([]history.Sample, 0)
+	for _, sample := range f.samples {
+		if sample.ServiceDate == serviceDate {
+			results = append(results, sample)
+		}
+	}
+	return results, nil
+}
+
 func testConfig() *config.Config {
+	tempBase := filepath.Join(os.TempDir(), "garbage-reminder-test")
 	return &config.Config{
 		TelegramBotToken:              "token",
 		TelegramChatID:                "chat",
 		EupfinBaseURL:                 "https://example.com",
-		StateFile:                     "state.json",
-		DatabaseFile:                  "history.db",
+		SharedDataDir:                 "/share/garbage_eta",
+		StateFile:                     filepath.Join(tempBase, "state.json"),
+		DatabaseFile:                  filepath.Join(tempBase, "history.db"),
+		CollectorLogFile:              filepath.Join(tempBase, "collector.log"),
+		ExportsDir:                    filepath.Join(tempBase, "exports"),
 		CheckInterval:                 time.Minute,
 		HTTPPort:                      "8080",
 		TargetCustID:                  5005808,

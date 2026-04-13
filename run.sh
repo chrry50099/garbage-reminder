@@ -38,9 +38,12 @@ if bashio::config.has_value 'target_time'; then
 fi
 export TARGET_TIME="${target_time}"
 
-export STATE_FILE="/data/state.json"
-export DATABASE_FILE="/data/history.db"
+export SHARED_DATA_DIR="/share/garbage_eta"
+export STATE_FILE="/share/garbage_eta/state.json"
+export DATABASE_FILE="/share/garbage_eta/history.db"
+export COLLECTOR_LOG_FILE="/share/garbage_eta/logs/collector.log"
+export EXPORTS_DIR="/share/garbage_eta/exports"
 
-mkdir -p /data
+mkdir -p /share/garbage_eta /share/garbage_eta/logs /share/garbage_eta/exports
 
 exec /app/server

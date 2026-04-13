@@ -11,789 +11,152 @@ var dashboardTemplate = template.Must(template.New("dashboard").Parse(`<!DOCTYPE
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Garbage ETA Predictor</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
   <style>
-    :root {
-      color-scheme: dark;
-      --bg: radial-gradient(circle at top, #205c53 0%, #11222a 45%, #081116 100%);
-      --panel: rgba(8, 17, 22, 0.78);
-      --panel-border: rgba(197, 255, 233, 0.15);
-      --accent: #8ef0d0;
-      --accent-strong: #f7d46f;
-      --text: #f5f9f7;
-      --muted: #b8c7c1;
-      --danger: #ff8e8e;
-      --success: #9ef3b5;
-      --shadow: 0 24px 60px rgba(0, 0, 0, 0.25);
-      --radius: 24px;
-      --font: "IBM Plex Sans", "Noto Sans TC", "Segoe UI", sans-serif;
-    }
-
-    * {
-      box-sizing: border-box;
-    }
-
-    body {
-      margin: 0;
-      min-height: 100vh;
-      background: var(--bg);
-      color: var(--text);
-      font-family: var(--font);
-    }
-
-    .shell {
-      max-width: 1180px;
-      margin: 0 auto;
-      padding: 24px;
-    }
-
-    .hero,
-    .panel {
-      background: var(--panel);
-      border: 1px solid var(--panel-border);
-      box-shadow: var(--shadow);
-      backdrop-filter: blur(18px);
-      border-radius: var(--radius);
-    }
-
-    .hero {
-      padding: 28px;
-      position: relative;
-      overflow: hidden;
-    }
-
-    .hero::after {
-      content: "";
-      position: absolute;
-      inset: auto -80px -100px auto;
-      width: 260px;
-      height: 260px;
-      border-radius: 50%;
-      background: radial-gradient(circle, rgba(247, 212, 111, 0.32) 0%, rgba(247, 212, 111, 0) 70%);
-      pointer-events: none;
-    }
-
-    .eyebrow {
-      font-size: 0.82rem;
-      letter-spacing: 0.18em;
-      text-transform: uppercase;
-      color: var(--accent);
-      margin: 0 0 12px;
-    }
-
-    .title-row {
-      display: flex;
-      justify-content: space-between;
-      gap: 16px;
-      align-items: flex-start;
-      flex-wrap: wrap;
-    }
-
-    h1 {
-      margin: 0;
-      font-size: clamp(1.8rem, 4vw, 3rem);
-      line-height: 1.05;
-      font-weight: 650;
-    }
-
-    .subtitle {
-      margin: 8px 0 0;
-      color: var(--muted);
-      font-size: 1rem;
-    }
-
-    .badge-row,
-    .meta-row {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 10px;
-    }
-
-    .badge,
-    .meta-pill {
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      border-radius: 999px;
-      padding: 9px 14px;
-      background: rgba(255, 255, 255, 0.06);
-      color: var(--text);
-      font-size: 0.92rem;
-    }
-
-    .badge.active {
-      background: rgba(142, 240, 208, 0.14);
-      color: var(--accent);
-    }
-
-    .badge.inactive {
-      background: rgba(255, 142, 142, 0.12);
-      color: var(--danger);
-    }
-
-    .grid {
-      display: grid;
-      grid-template-columns: repeat(12, minmax(0, 1fr));
-      gap: 18px;
-      margin-top: 18px;
-    }
-
-    .panel {
-      padding: 22px;
-    }
-
-    .panel h2 {
-      margin: 0 0 16px;
-      font-size: 1.05rem;
-      font-weight: 620;
-      letter-spacing: 0.02em;
-    }
-
-    .eta-panel {
-      grid-column: span 7;
-      display: grid;
-      gap: 16px;
-    }
-
-    .status-panel {
-      grid-column: span 5;
-      display: grid;
-      gap: 16px;
-    }
-
-    .wide-panel {
-      grid-column: span 6;
-    }
-
-    .full-panel {
-      grid-column: span 12;
-    }
-
-    .stats {
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 14px;
-    }
-
-    .stat-card {
-      padding: 18px;
-      border-radius: 20px;
-      background: rgba(255, 255, 255, 0.05);
-      border: 1px solid rgba(255, 255, 255, 0.05);
-    }
-
-    .stat-label {
-      color: var(--muted);
-      font-size: 0.82rem;
-      margin-bottom: 8px;
-    }
-
-    .stat-value {
-      font-size: clamp(1.1rem, 2.2vw, 1.6rem);
-      font-weight: 620;
-    }
-
-    .hero-value {
-      font-size: clamp(2.4rem, 7vw, 4.6rem);
-      line-height: 0.95;
-      font-weight: 680;
-      margin: 2px 0 6px;
-    }
-
-    .muted {
-      color: var(--muted);
-    }
-
-    .message {
-      margin-top: 10px;
-      padding: 14px 16px;
-      border-radius: 18px;
-      background: rgba(255, 255, 255, 0.05);
-      color: var(--muted);
-      line-height: 1.5;
-    }
-
-    .message.success {
-      color: var(--success);
-      background: rgba(158, 243, 181, 0.08);
-    }
-
-    .message.error {
-      color: var(--danger);
-      background: rgba(255, 142, 142, 0.08);
-    }
-
-    dl {
-      margin: 0;
-      display: grid;
-      gap: 12px;
-    }
-
-    .kv {
-      display: grid;
-      grid-template-columns: 120px 1fr;
-      gap: 12px;
-      align-items: start;
-    }
-
-    dt {
-      color: var(--muted);
-    }
-
-    dd {
-      margin: 0;
-      font-weight: 510;
-      word-break: break-word;
-    }
-
-    a {
-      color: var(--accent);
-    }
-
-    pre {
-      margin: 0;
-      white-space: pre-wrap;
-      word-break: break-word;
-      border-radius: 18px;
-      background: rgba(0, 0, 0, 0.26);
-      padding: 16px;
-      font-size: 0.84rem;
-      line-height: 1.5;
-      color: #d8f2e9;
-    }
-
-    .form-grid {
-      display: grid;
-      grid-template-columns: repeat(12, minmax(0, 1fr));
-      gap: 14px;
-    }
-
-    .field {
-      grid-column: span 12;
-      display: grid;
-      gap: 8px;
-    }
-
-    .field.half {
-      grid-column: span 6;
-    }
-
-    label {
-      font-size: 0.92rem;
-      color: var(--muted);
-    }
-
-    textarea,
-    select,
-    input {
-      width: 100%;
-      border: 1px solid rgba(255, 255, 255, 0.12);
-      border-radius: 16px;
-      background: rgba(0, 0, 0, 0.22);
-      color: var(--text);
-      padding: 14px 16px;
-      font: inherit;
-    }
-
-    textarea {
-      min-height: 120px;
-      resize: vertical;
-    }
-
-    .device-list {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-      gap: 10px;
-    }
-
-    .device-option {
-      display: flex;
-      gap: 12px;
-      align-items: flex-start;
-      padding: 14px;
-      border-radius: 18px;
-      background: rgba(255, 255, 255, 0.05);
-      border: 1px solid rgba(255, 255, 255, 0.08);
-    }
-
-    .device-option input[type="checkbox"] {
-      width: auto;
-      margin-top: 4px;
-      accent-color: #8ef0d0;
-    }
-
-    .device-meta strong {
-      display: block;
-      margin-bottom: 6px;
-      font-size: 0.98rem;
-    }
-
-    .device-meta span {
-      color: var(--muted);
-      font-size: 0.86rem;
-    }
-
-    .actions {
-      display: flex;
-      gap: 12px;
-      align-items: center;
-      flex-wrap: wrap;
-    }
-
-    button {
-      border: 0;
-      border-radius: 999px;
-      padding: 12px 18px;
-      background: linear-gradient(135deg, #8ef0d0 0%, #f7d46f 100%);
-      color: #081116;
-      font: inherit;
-      font-weight: 700;
-      cursor: pointer;
-    }
-
-    button:disabled {
-      cursor: not-allowed;
-      opacity: 0.55;
-    }
-
-    .helper {
-      color: var(--muted);
-      font-size: 0.86rem;
-      line-height: 1.5;
-    }
-
-    @media (max-width: 900px) {
-      .eta-panel,
-      .status-panel,
-      .wide-panel,
-      .full-panel {
-        grid-column: span 12;
-      }
-
-      .stats {
-        grid-template-columns: 1fr;
-      }
-
-      .kv,
-      .field.half {
-        grid-column: span 12;
-        grid-template-columns: 1fr;
-        gap: 6px;
-      }
-    }
+    :root{color-scheme:dark;--bg:#0a1216;--panel:#112028;--line:#274048;--text:#f3faf8;--muted:#a8c0b7;--accent:#95f2d2;--warn:#ffd36b;--danger:#ff8f8f;--radius:22px;font-family:"IBM Plex Sans","Noto Sans TC","Segoe UI",sans-serif}
+    *{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at top,rgba(61,132,115,.28),transparent 30%),var(--bg);color:var(--text);font-family:var(--font)}
+    .shell{max-width:1320px;margin:0 auto;padding:24px}.panel{background:rgba(17,32,40,.9);border:1px solid var(--line);border-radius:var(--radius);padding:20px}
+    .hero{padding:28px}.grid{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:18px;margin-top:18px}.s12{grid-column:span 12}.s7{grid-column:span 7}.s5{grid-column:span 5}.s6{grid-column:span 6}
+    .title{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap}.eyebrow{font-size:.82rem;letter-spacing:.18em;text-transform:uppercase;color:var(--accent);margin:0 0 10px}
+    h1,h2{margin:0}h1{font-size:clamp(2rem,4vw,3.2rem);line-height:1.03}h2{font-size:1.05rem;margin-bottom:14px}.subtitle,.muted,.helper,label,th,dt{color:var(--muted)}
+    .badge{display:inline-flex;padding:10px 14px;border-radius:999px;background:rgba(255,255,255,.06)}.active{color:var(--accent)}.inactive{color:var(--danger)}
+    .hero-value{font-size:clamp(2.5rem,7vw,4.8rem);font-weight:700;line-height:.94;margin:8px 0}.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-top:18px}
+    .stat,.card{padding:15px;border-radius:18px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.06)}.stat-label{font-size:.82rem;color:var(--muted);margin-bottom:8px}.stat-value{font-size:1.3rem;font-weight:620}
+    .message{margin-top:12px;padding:14px 16px;border-radius:18px;background:rgba(255,255,255,.05);color:var(--muted)}.error{color:var(--danger)}.success{color:#a4f4bc}
+    .kv{display:grid;grid-template-columns:130px 1fr;gap:12px;margin:10px 0}dd{margin:0;word-break:break-word}
+    .toolbar,.row,.actions{display:flex;gap:12px;flex-wrap:wrap;align-items:center}.toolbar{justify-content:space-between;margin-bottom:14px}
+    select,input,textarea,button{font:inherit;border-radius:14px;border:1px solid rgba(255,255,255,.12);background:rgba(0,0,0,.22);color:var(--text);padding:12px 14px}
+    select,input{min-height:46px}textarea{width:100%;min-height:112px;resize:vertical}button{border:0;background:linear-gradient(135deg,var(--accent),var(--warn));color:#071014;font-weight:700;cursor:pointer}button:disabled{opacity:.55;cursor:not-allowed}
+    .history{display:grid;grid-template-columns:minmax(320px,.95fr) minmax(0,1.45fr);gap:18px}.summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+    #history-map{min-height:420px;border-radius:18px;overflow:hidden;border:1px solid rgba(255,255,255,.08)}
+    .table-wrap{overflow:auto;border-radius:18px;border:1px solid rgba(255,255,255,.06);background:rgba(0,0,0,.16);margin-top:18px}table{width:100%;border-collapse:collapse;font-size:.9rem}th,td{padding:10px 12px;border-bottom:1px solid rgba(255,255,255,.08);text-align:left;vertical-align:top}
+    pre{margin:0;padding:16px;border-radius:18px;background:rgba(0,0,0,.24);overflow:auto;color:#d8f2e9;font-size:.84rem;line-height:1.5}
+    .device-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}.device{display:flex;gap:12px;align-items:flex-start;padding:14px;border-radius:18px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08)}
+    .device input{width:auto;margin-top:4px;accent-color:var(--accent)}
+    @media (max-width:980px){.s12,.s7,.s5,.s6{grid-column:span 12}.stats,.summary{grid-template-columns:repeat(2,minmax(0,1fr))}.history{grid-template-columns:1fr}.kv{grid-template-columns:1fr;gap:6px}}
+    @media (max-width:640px){.stats,.summary{grid-template-columns:1fr}}
   </style>
 </head>
 <body>
   <main class="shell">
-    <section class="hero">
+    <section class="panel hero">
       <p class="eyebrow">Home Assistant App</p>
-      <div class="title-row">
-        <div>
-          <h1 id="route-title">Garbage ETA Predictor</h1>
-          <p class="subtitle" id="route-subtitle">雙溪線 / 有謙家園</p>
-        </div>
-        <div class="badge-row">
-          <span class="badge" id="service-badge">載入中</span>
-          <span class="badge" id="prediction-badge">等待資料</span>
-        </div>
+      <div class="title">
+        <div><h1 id="route-title">Garbage ETA Predictor</h1><p class="subtitle" id="route-subtitle">雙溪線 / 有謙家園</p></div>
+        <div class="row"><span class="badge" id="service-badge">載入中</span><span class="badge" id="prediction-badge">等待資料</span></div>
       </div>
       <div class="grid">
-        <div class="panel eta-panel">
-          <div>
-            <div class="muted">預測剩餘時間</div>
-            <div class="hero-value" id="remaining-minutes">--</div>
-            <div class="muted" id="arrival-at">尚未取得到站預測</div>
-          </div>
+        <section class="panel s7">
+          <div class="muted">預測剩餘時間</div>
+          <div class="hero-value" id="remaining-minutes">--</div>
+          <div class="muted" id="arrival-at">尚未取得到站預測</div>
           <div class="stats">
-            <div class="stat-card">
-              <div class="stat-label">資料來源</div>
-              <div class="stat-value" id="prediction-source">待命中</div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-label">信心等級</div>
-              <div class="stat-value" id="prediction-confidence">--</div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-label">歷史比對</div>
-              <div class="stat-value" id="prediction-match">--</div>
-            </div>
+            <div class="stat"><div class="stat-label">資料來源</div><div class="stat-value" id="prediction-source">待命中</div></div>
+            <div class="stat"><div class="stat-label">信心等級</div><div class="stat-value" id="prediction-confidence">--</div></div>
+            <div class="stat"><div class="stat-label">今日 sample 數</div><div class="stat-value" id="today-samples">0</div></div>
+            <div class="stat"><div class="stat-label">今日 GPS sample</div><div class="stat-value" id="today-gps-samples">0</div></div>
           </div>
           <div class="message" id="status-message">正在讀取目前狀態...</div>
-        </div>
-        <div class="panel status-panel">
+        </section>
+        <section class="panel s5">
           <h2>今晚狀態</h2>
-          <div class="meta-row">
-            <span class="meta-pill"><strong id="service-date">--</strong></span>
-            <span class="meta-pill"><strong id="weekday">--</strong></span>
-          </div>
           <dl>
+            <div class="kv"><dt>日期</dt><dd id="service-date">--</dd></div>
+            <div class="kv"><dt>星期</dt><dd id="weekday">--</dd></div>
             <div class="kv"><dt>收集時窗</dt><dd id="collection-window">--</dd></div>
             <div class="kv"><dt>Run 狀態</dt><dd id="run-status">--</dd></div>
             <div class="kv"><dt>最近收集</dt><dd id="last-collected">--</dd></div>
             <div class="kv"><dt>已送提醒</dt><dd id="notified-offsets">--</dd></div>
+            <div class="kv"><dt>輪詢間隔</dt><dd id="check-interval">--</dd></div>
+            <div class="kv"><dt>共享路徑</dt><dd id="shared-data-path">--</dd></div>
             <div class="kv"><dt>最後更新</dt><dd id="updated-at">--</dd></div>
           </dl>
-        </div>
-        <section class="panel wide-panel">
+        </section>
+        <section class="panel s6">
           <h2>車輛與站點</h2>
           <dl>
             <div class="kv"><dt>GPS 狀態</dt><dd id="gps-status">--</dd></div>
             <div class="kv"><dt>垃圾車座標</dt><dd id="truck-coords">--</dd></div>
             <div class="kv"><dt>目標站點</dt><dd id="target-coords">--</dd></div>
-            <div class="kv"><dt>地圖</dt><dd><a id="map-link" href="#" target="_blank" rel="noreferrer">開啟雙點地圖</a></dd></div>
+            <div class="kv"><dt>地圖</dt><dd><a id="map-link" href="#" target="_blank" rel="noreferrer">等待 GPS 後可產生地圖</a></dd></div>
           </dl>
         </section>
-        <section class="panel wide-panel">
-          <h2>API 與除錯</h2>
+        <section class="panel s6">
+          <h2>API 與即時除錯</h2>
           <dl>
             <div class="kv"><dt>EstimatedTime</dt><dd id="api-estimated">--</dd></div>
             <div class="kv"><dt>WaitingTime</dt><dd id="api-waiting">--</dd></div>
             <div class="kv"><dt>狀態 API</dt><dd><a id="status-link" href="./status" target="_blank" rel="noreferrer">開啟 /status JSON</a></dd></div>
           </dl>
-          <pre id="raw-json">{
-  "message": "loading"
-}</pre>
+          <pre id="raw-json">{"message":"loading"}</pre>
         </section>
-        <section class="panel full-panel">
+        <section class="panel s12">
+          <div class="toolbar">
+            <div><h2>歷史資料</h2><div class="helper">可切換任一天的收集結果，直接看軌跡、摘要與 JSON / CSV 匯出。</div></div>
+            <div class="row"><label for="history-date">選擇日期</label><select id="history-date"></select><a id="history-json-link" href="#" target="_blank" rel="noreferrer">JSON</a><a id="history-csv-link" href="#" target="_blank" rel="noreferrer">CSV</a></div>
+          </div>
+          <div class="history">
+            <div>
+              <div class="summary">
+                <div class="card"><div class="stat-label">總 sample</div><div class="stat-value" id="history-sample-count">0</div></div>
+                <div class="card"><div class="stat-label">有 GPS sample</div><div class="stat-value" id="history-gps-count">0</div></div>
+                <div class="card"><div class="stat-label">第一筆</div><div class="stat-value" id="history-first">--</div></div>
+                <div class="card"><div class="stat-label">最後一筆</div><div class="stat-value" id="history-last">--</div></div>
+                <div class="card"><div class="stat-label">Run 狀態</div><div class="stat-value" id="history-run-status">--</div></div>
+                <div class="card"><div class="stat-label">已送提醒</div><div class="stat-value" id="history-notified">--</div></div>
+              </div>
+              <dl>
+                <div class="kv"><dt>到站時間</dt><dd id="history-arrival">--</dd></div>
+                <div class="kv"><dt>共享資料</dt><dd id="history-shared-path">--</dd></div>
+                <div class="kv"><dt>Collection Window</dt><dd id="history-window">--</dd></div>
+              </dl>
+              <div class="message" id="history-message">正在載入歷史資料...</div>
+            </div>
+            <div id="history-map"></div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>時間</th><th>GPS</th><th>座標</th><th>Progress</th><th>Segment</th><th>Lateral</th><th>API ETA</th><th>Waiting</th></tr></thead>
+              <tbody id="history-table-body"><tr><td colspan="8" class="helper">尚未載入資料。</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+        <section class="panel s12">
           <h2>HomePod Mini 測試播報</h2>
-          <div class="form-grid">
-            <div class="field">
-              <label for="broadcast-message">播報訊息</label>
-              <textarea id="broadcast-message" placeholder="例如：垃圾車測試廣播，請準備倒垃圾。"></textarea>
-            </div>
-            <div class="field half">
-              <label for="tts-entity">TTS 引擎</label>
-              <select id="tts-entity"></select>
-            </div>
-            <div class="field half">
-              <label for="tts-language">語言代碼（可留空）</label>
-                <input id="tts-language" type="text" placeholder="Gemini 請留空；其他可填 zh-TW 或 en">
-            </div>
-            <div class="field half">
-              <label for="tts-voice">Gemini 聲線</label>
-              <select id="tts-voice">
-                <option value="">自動（Gemini 預設用 achernar）</option>
-                <option value="achernar">achernar</option>
-                <option value="leda">leda</option>
-                <option value="kore">kore</option>
-                <option value="zephyr">zephyr</option>
-              </select>
-            </div>
-            <div class="field">
-              <label>選擇要播報的 HomePod mini</label>
-              <div class="device-list" id="device-list">
-                <div class="helper">正在讀取可用裝置...</div>
-              </div>
-            </div>
-            <div class="field">
-              <div class="actions">
-                <button id="broadcast-button" type="button" disabled>送出測試播報</button>
-                <span class="helper" id="broadcast-summary">請先輸入訊息並勾選至少一台 HomePod。</span>
-              </div>
-              <div class="message" id="broadcast-result">這裡會顯示送出結果。</div>
-            </div>
+          <div class="row" style="display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:14px">
+            <div style="grid-column:span 12"><label for="broadcast-message">播報訊息</label><textarea id="broadcast-message" placeholder="例如：垃圾車測試廣播，請準備倒垃圾。"></textarea></div>
+            <div style="grid-column:span 6"><label for="tts-entity">TTS 引擎</label><select id="tts-entity"></select></div>
+            <div style="grid-column:span 6"><label for="tts-language">語言代碼（可留空）</label><input id="tts-language" type="text" placeholder="Gemini 請留空；其他可填 zh-TW 或 en"></div>
+            <div style="grid-column:span 6"><label for="tts-voice">Gemini 聲線</label><select id="tts-voice"><option value="">自動（Gemini 預設用 achernar）</option><option value="achernar">achernar</option><option value="leda">leda</option><option value="kore">kore</option><option value="zephyr">zephyr</option></select></div>
+            <div style="grid-column:span 12"><label>選擇要播報的 HomePod mini</label><div class="device-list" id="device-list"><div class="helper">正在讀取可用裝置...</div></div></div>
+            <div style="grid-column:span 12"><div class="actions"><button id="broadcast-button" type="button" disabled>送出測試播報</button><span class="helper" id="broadcast-summary">請先輸入訊息並勾選至少一台 HomePod。</span></div><div class="message" id="broadcast-result">這裡會顯示送出結果。</div></div>
           </div>
         </section>
       </div>
     </section>
   </main>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
   <script>
-    const statusURL = new URL("./status", window.location.href);
-    const broadcastOptionsURL = new URL("./api/broadcast/options", window.location.href);
-    const broadcastTestURL = new URL("./api/broadcast/test", window.location.href);
-    const els = {
-      routeTitle: document.getElementById("route-title"),
-      routeSubtitle: document.getElementById("route-subtitle"),
-      serviceBadge: document.getElementById("service-badge"),
-      predictionBadge: document.getElementById("prediction-badge"),
-      remainingMinutes: document.getElementById("remaining-minutes"),
-      arrivalAt: document.getElementById("arrival-at"),
-      predictionSource: document.getElementById("prediction-source"),
-      predictionConfidence: document.getElementById("prediction-confidence"),
-      predictionMatch: document.getElementById("prediction-match"),
-      statusMessage: document.getElementById("status-message"),
-      serviceDate: document.getElementById("service-date"),
-      weekday: document.getElementById("weekday"),
-      collectionWindow: document.getElementById("collection-window"),
-      runStatus: document.getElementById("run-status"),
-      lastCollected: document.getElementById("last-collected"),
-      notifiedOffsets: document.getElementById("notified-offsets"),
-      updatedAt: document.getElementById("updated-at"),
-      gpsStatus: document.getElementById("gps-status"),
-      truckCoords: document.getElementById("truck-coords"),
-      targetCoords: document.getElementById("target-coords"),
-      mapLink: document.getElementById("map-link"),
-      apiEstimated: document.getElementById("api-estimated"),
-      apiWaiting: document.getElementById("api-waiting"),
-      rawJSON: document.getElementById("raw-json"),
-      statusLink: document.getElementById("status-link"),
-      broadcastMessage: document.getElementById("broadcast-message"),
-      ttsEntity: document.getElementById("tts-entity"),
-      ttsLanguage: document.getElementById("tts-language"),
-      ttsVoice: document.getElementById("tts-voice"),
-      deviceList: document.getElementById("device-list"),
-      broadcastButton: document.getElementById("broadcast-button"),
-      broadcastSummary: document.getElementById("broadcast-summary"),
-      broadcastResult: document.getElementById("broadcast-result")
-    };
-
-    let broadcastOptions = { media_players: [], tts_entities: [], default_tts_entity: "" };
-
-    els.statusLink.href = statusURL.toString();
-
-    function formatDateTime(value) {
-      if (!value) return "--";
-      const date = new Date(value);
-      if (Number.isNaN(date.getTime())) return value;
-      return new Intl.DateTimeFormat("zh-TW", {
-        month: "2-digit",
-        day: "2-digit",
-        hour: "2-digit",
-        minute: "2-digit"
-      }).format(date);
-    }
-
-    function formatCoords(lat, lng) {
-      if (typeof lat !== "number" || typeof lng !== "number") return "--";
-      return lat.toFixed(6) + ", " + lng.toFixed(6);
-    }
-
-    function mapURL(truckLat, truckLng, targetLat, targetLng) {
-      const params = new URLSearchParams({
-        api: "1",
-        origin: truckLat + "," + truckLng,
-        destination: targetLat + "," + targetLng,
-        travelmode: "driving"
-      });
-      return "https://www.google.com/maps/dir/?" + params.toString();
-    }
-
-    function sourceLabel(source) {
-      const labels = {
-        historical_model: "歷史模型",
-        api_estimated_time: "API EstimatedTime",
-        api_waiting_time: "API WaitingTime"
-      };
-      return labels[source] || source || "待命中";
-    }
-
-    function confidenceLabel(confidence) {
-      const labels = {
-        high: "高",
-        medium: "中",
-        low: "低"
-      };
-      return labels[confidence] || confidence || "--";
-    }
-
-    function selectedTargets() {
-      return Array.from(document.querySelectorAll("input[name='broadcast-target']:checked")).map((node) => node.value);
-    }
-
-    function updateBroadcastButtonState() {
-      const hasMessage = els.broadcastMessage.value.trim().length > 0;
-      const targets = selectedTargets();
-      const isGemini = els.ttsEntity.value === "tts.google_ai_tts" || els.ttsEntity.value === "tts.google_generative_ai_tts";
-      els.broadcastButton.disabled = !(hasMessage && targets.length > 0 && els.ttsEntity.value);
-      if (!hasMessage) {
-        els.broadcastSummary.textContent = "請先輸入測試播報內容。";
-      } else if (targets.length === 0) {
-        els.broadcastSummary.textContent = "請至少勾選一台要播報的 HomePod。";
-      } else if (!els.ttsEntity.value) {
-        els.broadcastSummary.textContent = "目前找不到可用的 TTS 引擎。";
-      } else if (isGemini) {
-        const voice = els.ttsVoice.value || "achernar";
-        els.broadcastSummary.textContent = "Gemini TTS 會自動偵測中文，語言欄位請留空；目前聲線為 " + voice + "。";
-      } else {
-        els.broadcastSummary.textContent = "將送到 " + targets.length + " 台裝置。";
-      }
-    }
-
-    function renderBroadcastOptions(options) {
-      broadcastOptions = options || { media_players: [], tts_entities: [], default_tts_entity: "" };
-
-      els.ttsEntity.innerHTML = "";
-      if ((broadcastOptions.tts_entities || []).length === 0) {
-        const option = document.createElement("option");
-        option.textContent = "找不到可用 TTS";
-        option.value = "";
-        els.ttsEntity.appendChild(option);
-      } else {
-        broadcastOptions.tts_entities.forEach((entity) => {
-          const option = document.createElement("option");
-          option.value = entity.entity_id;
-          option.textContent = entity.friendly_name + " (" + entity.entity_id + ")";
-          if (entity.entity_id === broadcastOptions.default_tts_entity) {
-            option.selected = true;
-          }
-          els.ttsEntity.appendChild(option);
-        });
-      }
-
-      els.deviceList.innerHTML = "";
-      if ((broadcastOptions.media_players || []).length === 0) {
-        els.deviceList.innerHTML = "<div class='helper'>目前找不到可用的 HomePod 或 media_player。</div>";
-      } else {
-        broadcastOptions.media_players.forEach((device, index) => {
-          const label = document.createElement("label");
-          label.className = "device-option";
-
-          const input = document.createElement("input");
-          input.type = "checkbox";
-          input.name = "broadcast-target";
-          input.value = device.entity_id;
-          input.checked = index === 0;
-          input.addEventListener("change", updateBroadcastButtonState);
-
-          const meta = document.createElement("div");
-          meta.className = "device-meta";
-          meta.innerHTML = "<strong>" + device.friendly_name + "</strong><span>" + device.entity_id + " / " + device.state + "</span>";
-
-          label.appendChild(input);
-          label.appendChild(meta);
-          els.deviceList.appendChild(label);
-        });
-      }
-
-      updateBroadcastButtonState();
-    }
-
-    function render(status) {
-      const routeName = status.route_name || "雙溪線";
-      const pointName = status.point_name || "有謙家園";
-      const pointSeq = status.point_seq ? "第 " + status.point_seq + " 站" : "目標站點";
-
-      els.statusMessage.className = "message";
-      els.routeTitle.textContent = routeName;
-      els.routeSubtitle.textContent = pointName + " / " + pointSeq;
-      els.serviceBadge.textContent = status.active ? "收集中" : "待命中";
-      els.serviceBadge.className = "badge " + (status.active ? "active" : "inactive");
-
-      const prediction = status.prediction;
-      if (prediction) {
-        els.predictionBadge.textContent = sourceLabel(prediction.source);
-        els.predictionBadge.className = "badge active";
-        els.remainingMinutes.textContent = prediction.remaining_minutes + " min";
-        els.arrivalAt.textContent = "預測到站 " + formatDateTime(prediction.predicted_arrival_at);
-        els.predictionSource.textContent = sourceLabel(prediction.source);
-        els.predictionConfidence.textContent = confidenceLabel(prediction.confidence);
-        if (prediction.matched_samples || prediction.historical_runs) {
-          els.predictionMatch.textContent = prediction.matched_samples + " / " + prediction.historical_runs;
-        } else {
-          els.predictionMatch.textContent = "--";
-        }
-      } else {
-        els.predictionBadge.textContent = "等待資料";
-        els.predictionBadge.className = "badge inactive";
-        els.remainingMinutes.textContent = "--";
-        els.arrivalAt.textContent = "尚未取得到站預測";
-        els.predictionSource.textContent = "待命中";
-        els.predictionConfidence.textContent = "--";
-        els.predictionMatch.textContent = "--";
-      }
-
-      els.statusMessage.textContent = status.message || "服務已啟動，等待下一次輪詢。";
-      els.serviceDate.textContent = status.service_date || "--";
-      els.weekday.textContent = status.weekday || "--";
-      els.collectionWindow.textContent = status.collection_window || "--";
-      els.runStatus.textContent = status.run_status || "--";
-      els.lastCollected.textContent = formatDateTime(status.last_collected_at);
-      els.updatedAt.textContent = formatDateTime(status.updated_at);
-      els.notifiedOffsets.textContent = (status.notified_offsets || []).length
-        ? status.notified_offsets.map((offset) => offset + " 分鐘").join(" / ")
-        : "尚未送出";
-
-      els.gpsStatus.textContent = status.gps_available ? "可用" : "目前不可用";
-      els.truckCoords.textContent = status.gps_available ? formatCoords(status.truck_lat, status.truck_lng) : "--";
-      els.targetCoords.textContent = formatCoords(status.target_lat, status.target_lng);
-
-      if (status.gps_available && typeof status.target_lat === "number" && typeof status.target_lng === "number") {
-        els.mapLink.href = mapURL(status.truck_lat, status.truck_lng, status.target_lat, status.target_lng);
-        els.mapLink.textContent = "開啟垃圾車與站點路線";
-      } else {
-        els.mapLink.href = "#";
-        els.mapLink.textContent = "等待 GPS 後可產生地圖";
-      }
-
-      els.apiEstimated.textContent = status.api_estimated_text || "--";
-      els.apiWaiting.textContent = status.api_waiting_time === null || status.api_waiting_time === undefined
-        ? "--"
-        : String(status.api_waiting_time);
-      els.rawJSON.textContent = JSON.stringify(status, null, 2);
-    }
-
-    async function refreshStatus() {
-      try {
-        const response = await fetch(statusURL, { cache: "no-store" });
-        if (!response.ok) {
-          throw new Error("HTTP " + response.status);
-        }
-        const payload = await response.json();
-        render(payload);
-      } catch (error) {
-        els.statusMessage.textContent = "狀態讀取失敗：" + error.message;
-        els.statusMessage.className = "message error";
-      }
-    }
-
-    async function loadBroadcastOptions() {
-      try {
-        const response = await fetch(broadcastOptionsURL, { cache: "no-store" });
-        if (!response.ok) {
-          throw new Error("HTTP " + response.status);
-        }
-        const payload = await response.json();
-        renderBroadcastOptions(payload);
-        els.broadcastResult.textContent = "已載入可用的播報裝置與 TTS 引擎。";
-        els.broadcastResult.className = "message";
-      } catch (error) {
-        els.deviceList.innerHTML = "<div class='helper'>裝置清單讀取失敗：" + error.message + "</div>";
-        els.broadcastResult.textContent = "無法讀取播報設定：" + error.message;
-        els.broadcastResult.className = "message error";
-        updateBroadcastButtonState();
-      }
-    }
-
-    async function submitBroadcast() {
-      const payload = {
-        message: els.broadcastMessage.value.trim(),
-        target_entity_ids: selectedTargets(),
-        tts_entity_id: els.ttsEntity.value,
-        language: els.ttsLanguage.value.trim(),
-        voice: els.ttsVoice.value
-      };
-
-      els.broadcastButton.disabled = true;
-      els.broadcastResult.textContent = "正在送出測試播報...";
-      els.broadcastResult.className = "message";
-
-      try {
-        const response = await fetch(broadcastTestURL, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload)
-        });
-        const text = await response.text();
-        if (!response.ok) {
-          throw new Error(text || ("HTTP " + response.status));
-        }
-        els.broadcastResult.textContent = "已送出測試播報到：" + payload.target_entity_ids.join(" / ");
-        els.broadcastResult.className = "message success";
-      } catch (error) {
-        els.broadcastResult.textContent = "播報送出失敗：" + error.message;
-        els.broadcastResult.className = "message error";
-      } finally {
-        updateBroadcastButtonState();
-      }
-    }
-
-    els.broadcastMessage.addEventListener("input", updateBroadcastButtonState);
-    els.ttsEntity.addEventListener("change", updateBroadcastButtonState);
-    els.ttsVoice.addEventListener("change", updateBroadcastButtonState);
-    els.broadcastButton.addEventListener("click", submitBroadcast);
-
-    refreshStatus();
-    loadBroadcastOptions();
-    window.setInterval(refreshStatus, 30000);
+    const statusURL=new URL("./status",window.location.href),historyDatesURL=new URL("./api/history/dates",window.location.href),historyTodayURL=new URL("./api/history/today",window.location.href),historyDayURL=new URL("./api/history/day",window.location.href),historyDayJSONURL=new URL("./api/history/day.json",window.location.href),historyDayCSVURL=new URL("./api/history/day.csv",window.location.href),broadcastOptionsURL=new URL("./api/broadcast/options",window.location.href),broadcastTestURL=new URL("./api/broadcast/test",window.location.href);
+    const els={routeTitle:document.getElementById("route-title"),routeSubtitle:document.getElementById("route-subtitle"),serviceBadge:document.getElementById("service-badge"),predictionBadge:document.getElementById("prediction-badge"),remainingMinutes:document.getElementById("remaining-minutes"),arrivalAt:document.getElementById("arrival-at"),predictionSource:document.getElementById("prediction-source"),predictionConfidence:document.getElementById("prediction-confidence"),todaySamples:document.getElementById("today-samples"),todayGPSSamples:document.getElementById("today-gps-samples"),statusMessage:document.getElementById("status-message"),serviceDate:document.getElementById("service-date"),weekday:document.getElementById("weekday"),collectionWindow:document.getElementById("collection-window"),runStatus:document.getElementById("run-status"),lastCollected:document.getElementById("last-collected"),notifiedOffsets:document.getElementById("notified-offsets"),checkInterval:document.getElementById("check-interval"),sharedDataPath:document.getElementById("shared-data-path"),updatedAt:document.getElementById("updated-at"),gpsStatus:document.getElementById("gps-status"),truckCoords:document.getElementById("truck-coords"),targetCoords:document.getElementById("target-coords"),mapLink:document.getElementById("map-link"),apiEstimated:document.getElementById("api-estimated"),apiWaiting:document.getElementById("api-waiting"),statusLink:document.getElementById("status-link"),rawJSON:document.getElementById("raw-json"),historyDate:document.getElementById("history-date"),historyJSONLink:document.getElementById("history-json-link"),historyCSVLink:document.getElementById("history-csv-link"),historySampleCount:document.getElementById("history-sample-count"),historyGPSCount:document.getElementById("history-gps-count"),historyFirst:document.getElementById("history-first"),historyLast:document.getElementById("history-last"),historyRunStatus:document.getElementById("history-run-status"),historyNotified:document.getElementById("history-notified"),historyArrival:document.getElementById("history-arrival"),historySharedPath:document.getElementById("history-shared-path"),historyWindow:document.getElementById("history-window"),historyMessage:document.getElementById("history-message"),historyTableBody:document.getElementById("history-table-body"),broadcastMessage:document.getElementById("broadcast-message"),ttsEntity:document.getElementById("tts-entity"),ttsLanguage:document.getElementById("tts-language"),ttsVoice:document.getElementById("tts-voice"),deviceList:document.getElementById("device-list"),broadcastButton:document.getElementById("broadcast-button"),broadcastSummary:document.getElementById("broadcast-summary"),broadcastResult:document.getElementById("broadcast-result")};
+    let selectedHistoryDate="",historyMap,historyLayer,broadcastOptions={media_players:[],tts_entities:[],default_tts_entity:""};
+    const fmt=(v)=>{if(!v)return"--";const d=new Date(v);return Number.isNaN(d.getTime())?v:new Intl.DateTimeFormat("zh-TW",{year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit"}).format(d)},coords=(a,b)=>typeof a==="number"&&typeof b==="number"?a.toFixed(6)+", "+b.toFixed(6):"--",label=(m,k)=>m[k]||k||"--";
+    function googleMapURL(a,b,c,d){const p=new URLSearchParams({api:"1",origin:a+","+b,destination:c+","+d,travelmode:"driving"});return "https://www.google.com/maps/dir/?"+p.toString()}
+    function updateHistoryLinks(date){const j=new URL(historyDayJSONURL),c=new URL(historyDayCSVURL);j.searchParams.set("date",date);c.searchParams.set("date",date);els.historyJSONLink.href=j.toString();els.historyCSVLink.href=c.toString()}
+    function ensureMap(){if(historyMap)return;historyMap=L.map("history-map");L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:19,attribution:"&copy; OpenStreetMap contributors"}).addTo(historyMap);historyLayer=L.layerGroup().addTo(historyMap);historyMap.setView([24.748448,121.02032],14)}
+    function renderMap(day){ensureMap();historyLayer.clearLayers();const gps=(day.samples||[]).filter((s)=>s.gps_available&&typeof s.truck_lat==="number"&&typeof s.truck_lng==="number"),pts=gps.map((s)=>[s.truck_lat,s.truck_lng]),bounds=[];if(pts.length){L.polyline(pts,{color:"#95f2d2",weight:5,opacity:.9}).addTo(historyLayer);L.marker(pts[0]).addTo(historyLayer).bindPopup("起點");L.marker(pts[pts.length-1]).addTo(historyLayer).bindPopup("終點");bounds.push(...pts)}if(typeof day.target_lat==="number"&&typeof day.target_lng==="number"){const target=[day.target_lat,day.target_lng];L.circleMarker(target,{radius:8,color:"#ffd36b",fillColor:"#ffd36b",fillOpacity:.9}).addTo(historyLayer).bindPopup((day.point_name||"目標站點")+"（第 "+(day.point_seq||"--")+" 站）");bounds.push(target)}if(bounds.length)historyMap.fitBounds(bounds,{padding:[30,30]});else historyMap.setView([24.748448,121.02032],14)}
+    function renderStatus(s){const p=s.prediction;els.routeTitle.textContent=s.route_name||"雙溪線";els.routeSubtitle.textContent=(s.point_name||"有謙家園")+" / "+(s.point_seq?("第 "+s.point_seq+" 站"):"目標站點");els.serviceBadge.textContent=s.active?"收集中":"待命中";els.serviceBadge.className="badge "+(s.active?"active":"inactive");if(p){els.predictionBadge.textContent=label({historical_model:"歷史模型",api_estimated_time:"API EstimatedTime",api_waiting_time:"API WaitingTime"},p.source);els.predictionBadge.className="badge active";els.remainingMinutes.textContent=p.remaining_minutes+" min";els.arrivalAt.textContent="預測到站 "+fmt(p.predicted_arrival_at);els.predictionSource.textContent=label({historical_model:"歷史模型",api_estimated_time:"API EstimatedTime",api_waiting_time:"API WaitingTime"},p.source);els.predictionConfidence.textContent=label({high:"高",medium:"中",low:"低"},p.confidence)}else{els.predictionBadge.textContent="等待資料";els.predictionBadge.className="badge inactive";els.remainingMinutes.textContent="--";els.arrivalAt.textContent="尚未取得到站預測";els.predictionSource.textContent="待命中";els.predictionConfidence.textContent="--"}els.todaySamples.textContent=String(s.today_sample_count||0);els.todayGPSSamples.textContent=String(s.today_gps_sample_count||0);els.statusMessage.textContent=s.message||"服務已啟動，等待下一次輪詢。";els.statusMessage.className="message";els.serviceDate.textContent=s.service_date||"--";els.weekday.textContent=s.weekday||"--";els.collectionWindow.textContent=s.collection_window||"--";els.runStatus.textContent=s.run_status||"--";els.lastCollected.textContent=fmt(s.last_collected_at);els.notifiedOffsets.textContent=(s.notified_offsets||[]).length?s.notified_offsets.map((o)=>o+" 分鐘").join(" / "):"尚未送出";els.checkInterval.textContent=s.check_interval||"--";els.sharedDataPath.textContent=s.shared_data_path||"--";els.updatedAt.textContent=fmt(s.updated_at);els.gpsStatus.textContent=s.gps_available?"可用":"目前不可用";els.truckCoords.textContent=s.gps_available?coords(s.truck_lat,s.truck_lng):"--";els.targetCoords.textContent=coords(s.target_lat,s.target_lng);els.apiEstimated.textContent=s.api_estimated_text||"--";els.apiWaiting.textContent=s.api_waiting_time===null||s.api_waiting_time===undefined?"--":String(s.api_waiting_time);els.rawJSON.textContent=JSON.stringify(s,null,2);els.statusLink.href=statusURL.toString();if(s.gps_available&&typeof s.target_lat==="number"&&typeof s.target_lng==="number"){els.mapLink.href=googleMapURL(s.truck_lat,s.truck_lng,s.target_lat,s.target_lng);els.mapLink.textContent="開啟垃圾車與站點路線"}else{els.mapLink.href="#";els.mapLink.textContent="等待 GPS 後可產生地圖"}}
+    function renderHistory(day){updateHistoryLinks(day.service_date);els.historySampleCount.textContent=String(day.sample_count||0);els.historyGPSCount.textContent=String(day.gps_sample_count||0);els.historyFirst.textContent=fmt(day.first_collected_at);els.historyLast.textContent=fmt(day.last_collected_at);els.historyRunStatus.textContent=day.run_status||"尚未開始";els.historyNotified.textContent=(day.notified_offsets||[]).length?day.notified_offsets.map((o)=>o+" 分鐘").join(" / "):"尚未送出";els.historyArrival.textContent=fmt(day.arrival_at);els.historySharedPath.textContent=day.shared_data_path||"--";els.historyWindow.textContent=day.collection_window||"--";els.historyMessage.textContent=(day.samples||[]).length?"已載入 "+day.service_date+" 的完整收集紀錄。":"這一天還沒有 sample。";els.historyMessage.className="message";els.historyTableBody.innerHTML=(day.samples||[]).length?(day.samples||[]).map((s)=>"<tr><td>"+fmt(s.collected_at)+"</td><td>"+(s.gps_available?"有":"無")+"</td><td>"+(s.gps_available?coords(s.truck_lat,s.truck_lng):"--")+"</td><td>"+(s.progress_meters===null||s.progress_meters===undefined?"--":s.progress_meters.toFixed(1)+" m")+"</td><td>"+(s.segment_index===null||s.segment_index===undefined?"--":s.segment_index)+"</td><td>"+(s.lateral_offset_meters===null||s.lateral_offset_meters===undefined?"--":s.lateral_offset_meters.toFixed(1)+" m")+"</td><td>"+(s.api_estimated_minutes===null||s.api_estimated_minutes===undefined?(s.api_estimated_text||"--"):s.api_estimated_minutes+" 分鐘")+"</td><td>"+(s.api_waiting_time===null||s.api_waiting_time===undefined?"--":s.api_waiting_time)+"</td></tr>").join(""):"<tr><td colspan='8' class='helper'>這一天沒有資料。</td></tr>";renderMap(day)}
+    async function refreshStatus(){try{const r=await fetch(statusURL,{cache:"no-store"});if(!r.ok)throw new Error("HTTP "+r.status);renderStatus(await r.json())}catch(e){els.statusMessage.textContent="狀態讀取失敗："+e.message;els.statusMessage.className="message error"}}
+    async function loadHistoryDay(date){selectedHistoryDate=date;updateHistoryLinks(date);const u=new URL(historyDayURL);u.searchParams.set("date",date);try{const r=await fetch(u,{cache:"no-store"});if(!r.ok)throw new Error("HTTP "+r.status);renderHistory(await r.json())}catch(e){els.historyMessage.textContent="歷史資料讀取失敗："+e.message;els.historyMessage.className="message error";els.historyTableBody.innerHTML="<tr><td colspan='8' class='helper'>讀取失敗。</td></tr>"}}
+    async function loadHistoryDates(){const [dr,tr]=await Promise.all([fetch(historyDatesURL,{cache:"no-store"}),fetch(historyTodayURL,{cache:"no-store"})]);if(!dr.ok)throw new Error("dates HTTP "+dr.status);if(!tr.ok)throw new Error("today HTTP "+tr.status);const dp=await dr.json(),today=await tr.json(),dates=dp.dates||[],preferred=dates.includes(today.service_date)?today.service_date:(dates[0]||today.service_date);els.historyDate.innerHTML="";Array.from(new Set([preferred,...dates])).filter(Boolean).forEach((d)=>{const o=document.createElement("option");o.value=d;o.textContent=d;o.selected=d===preferred;els.historyDate.appendChild(o)});selectedHistoryDate=preferred;if(today.service_date===preferred)renderHistory(today);else await loadHistoryDay(preferred)}
+    function selectedTargets(){return Array.from(document.querySelectorAll("input[name='broadcast-target']:checked")).map((n)=>n.value)}
+    function updateBroadcastButtonState(){const hasMessage=els.broadcastMessage.value.trim().length>0,targets=selectedTargets(),isGemini=els.ttsEntity.value==="tts.google_ai_tts"||els.ttsEntity.value==="tts.google_generative_ai_tts";els.broadcastButton.disabled=!(hasMessage&&targets.length>0&&els.ttsEntity.value);if(!hasMessage)els.broadcastSummary.textContent="請先輸入測試播報內容。";else if(targets.length===0)els.broadcastSummary.textContent="請至少勾選一台要播報的 HomePod。";else if(!els.ttsEntity.value)els.broadcastSummary.textContent="目前找不到可用的 TTS 引擎。";else if(isGemini)els.broadcastSummary.textContent="Gemini 會自動判斷中文，語言欄位請留空；目前聲線為 "+(els.ttsVoice.value||"achernar")+"。";else els.broadcastSummary.textContent="將送到 "+targets.length+" 台裝置。"}
+    function renderBroadcastOptions(o){broadcastOptions=o||{media_players:[],tts_entities:[],default_tts_entity:""};els.ttsEntity.innerHTML="";if((broadcastOptions.tts_entities||[]).length===0){const option=document.createElement("option");option.value="";option.textContent="找不到可用 TTS";els.ttsEntity.appendChild(option)}else{broadcastOptions.tts_entities.forEach((entity)=>{const option=document.createElement("option");option.value=entity.entity_id;option.textContent=entity.friendly_name+" ("+entity.entity_id+")";option.selected=entity.entity_id===broadcastOptions.default_tts_entity;els.ttsEntity.appendChild(option)})}els.deviceList.innerHTML="";if((broadcastOptions.media_players||[]).length===0){els.deviceList.innerHTML="<div class='helper'>目前找不到可用的 HomePod 或 media_player。</div>"}else{broadcastOptions.media_players.forEach((device,index)=>{const label=document.createElement("label");label.className="device";const input=document.createElement("input");input.type="checkbox";input.name="broadcast-target";input.value=device.entity_id;input.checked=index===0;input.addEventListener("change",updateBroadcastButtonState);const meta=document.createElement("div");meta.innerHTML="<strong>"+device.friendly_name+"</strong><div class='helper'>"+device.entity_id+" / "+device.state+"</div>";label.appendChild(input);label.appendChild(meta);els.deviceList.appendChild(label)})}updateBroadcastButtonState()}
+    async function loadBroadcastOptions(){try{const r=await fetch(broadcastOptionsURL,{cache:"no-store"});if(!r.ok)throw new Error("HTTP "+r.status);renderBroadcastOptions(await r.json());els.broadcastResult.textContent="已載入可用的播報裝置與 TTS 引擎。";els.broadcastResult.className="message"}catch(e){els.deviceList.innerHTML="<div class='helper'>裝置清單讀取失敗："+e.message+"</div>";els.broadcastResult.textContent="無法讀取播報設定："+e.message;els.broadcastResult.className="message error";updateBroadcastButtonState()}}
+    async function submitBroadcast(){const payload={message:els.broadcastMessage.value.trim(),target_entity_ids:selectedTargets(),tts_entity_id:els.ttsEntity.value,language:els.ttsLanguage.value.trim(),voice:els.ttsVoice.value};els.broadcastButton.disabled=true;els.broadcastResult.textContent="正在送出測試播報...";els.broadcastResult.className="message";try{const r=await fetch(broadcastTestURL,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)}),text=await r.text();if(!r.ok)throw new Error(text||("HTTP "+r.status));els.broadcastResult.textContent="已送出測試播報到："+payload.target_entity_ids.join(" / ");els.broadcastResult.className="message success"}catch(e){els.broadcastResult.textContent="播報送出失敗："+e.message;els.broadcastResult.className="message error"}finally{updateBroadcastButtonState()}}
+    els.broadcastMessage.addEventListener("input",updateBroadcastButtonState);els.ttsEntity.addEventListener("change",updateBroadcastButtonState);els.ttsVoice.addEventListener("change",updateBroadcastButtonState);els.broadcastButton.addEventListener("click",submitBroadcast);els.historyDate.addEventListener("change",(e)=>loadHistoryDay(e.target.value));
+    refreshStatus();loadBroadcastOptions();loadHistoryDates().catch((e)=>{els.historyMessage.textContent="歷史資料初始化失敗："+e.message;els.historyMessage.className="message error"});window.setInterval(async()=>{await refreshStatus();if(selectedHistoryDate)await loadHistoryDay(selectedHistoryDate)},30000);
   </script>
 </body>
 </html>`))
@@ -804,7 +167,6 @@ func NewDashboardHandler() http.Handler {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_ = dashboardTemplate.Execute(w, nil)
 	})

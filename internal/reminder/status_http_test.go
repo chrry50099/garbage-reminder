@@ -66,7 +66,7 @@ func TestDashboardHandlerServesHTML(t *testing.T) {
 	if !strings.Contains(body, "Garbage ETA Predictor") {
 		t.Fatalf("expected dashboard title in body, got %s", body)
 	}
-	if !strings.Contains(body, "statusURL") || !strings.Contains(body, "HomePod Mini 測試播報") {
+	if !strings.Contains(body, "statusURL") || !strings.Contains(body, "HomePod Mini 測試播報") || !strings.Contains(body, "歷史資料") {
 		t.Fatalf("expected dashboard script in body, got %s", body)
 	}
 }

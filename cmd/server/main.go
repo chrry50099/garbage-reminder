@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -24,6 +25,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("Configuration load failed: %v", err)
 	}
+	if err := ensurePaths(cfg); err != nil {
+		log.Fatalf("Failed to prepare shared data paths: %v", err)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -39,11 +43,16 @@ func main() {
 	}
 	defer historyStore.Close()
 
+	collectorLog, err := reminder.NewCollectorLogger(cfg.CollectorLogFile, 5*1024*1024)
+	if err != nil {
+		log.Fatalf("Failed to create collector log: %v", err)
+	}
+
 	eupfinClient := eupfin.NewClient(cfg.EupfinBaseURL)
 	telegramNotifier := notifier.NewTelegram(cfg.TelegramBotToken, cfg.TelegramChatID)
 	haNotifier := notifier.NewHomeAssistant(cfg.HABaseURL, cfg.HAToken, cfg.HANotifyMode, cfg.HATTSTarget)
 	alertNotifier := notifier.NewMultiSender(telegramNotifier, haNotifier)
-	service := reminder.NewService(cfg, eupfinClient, alertNotifier, telegramNotifier, localState, historyStore)
+	service := reminder.NewService(cfg, eupfinClient, alertNotifier, telegramNotifier, localState, historyStore, collectorLog)
 
 	statusServer := startStatusServer(cfg.HTTPPort, service, haNotifier)
 	defer shutdownStatusServer(statusServer)
@@ -87,6 +96,11 @@ func startStatusServer(port string, service *reminder.Service, haControl *notifi
 	mux := http.NewServeMux()
 	mux.Handle("/", reminder.NewDashboardHandler())
 	mux.Handle("/status", reminder.NewStatusHandler(service))
+	mux.Handle("/api/history/dates", reminder.NewHistoryDatesHandler(service))
+	mux.Handle("/api/history/today", reminder.NewHistoryTodayHandler(service))
+	mux.Handle("/api/history/day", reminder.NewHistoryDayHandler(service))
+	mux.Handle("/api/history/day.json", reminder.NewHistoryDayJSONHandler(service))
+	mux.Handle("/api/history/day.csv", reminder.NewHistoryDayCSVHandler(service))
 	mux.Handle("/api/broadcast/options", reminder.NewBroadcastOptionsHandler(haControl))
 	mux.Handle("/api/broadcast/test", reminder.NewBroadcastTestHandler(haControl))
 
@@ -115,4 +129,19 @@ func shutdownStatusServer(server *http.Server) {
 	if err := server.Shutdown(ctx); err != nil && err != http.ErrServerClosed {
 		log.Printf("Status server shutdown failed: %v", err)
 	}
+}
+
+func ensurePaths(cfg *config.Config) error {
+	for _, dir := range []string{
+		cfg.SharedDataDir,
+		filepath.Dir(cfg.StateFile),
+		filepath.Dir(cfg.DatabaseFile),
+		filepath.Dir(cfg.CollectorLogFile),
+		cfg.ExportsDir,
+	} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
+	return nil
 }

@@ -149,3 +149,48 @@ func TestSQLiteStoreListsHistoricalSamplesWithProjectionFields(t *testing.T) {
 		t.Fatalf("unexpected historical lateral offset: %+v", samples[0].LateralOffsetMeters)
 	}
 }
+
+func TestSQLiteStoreListsServiceDatesAndSamplesByDay(t *testing.T) {
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "history.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() returned error: %v", err)
+	}
+	defer store.Close()
+
+	now := time.Date(2026, 4, 13, 20, 0, 0, 0, time.FixedZone("CST", 8*3600))
+	if _, err := store.EnsureRun("2026-04-13", time.Monday, 461, 27, 24.7, 121.0, now); err != nil {
+		t.Fatalf("EnsureRun() returned error: %v", err)
+	}
+	if _, err := store.EnsureRun("2026-04-12", time.Sunday, 461, 27, 24.7, 121.0, now.AddDate(0, 0, -1)); err != nil {
+		t.Fatalf("EnsureRun() returned error: %v", err)
+	}
+	if err := store.InsertSample(Sample{
+		RunID:        "2026-04-13",
+		ServiceDate:  "2026-04-13",
+		Weekday:      time.Monday,
+		RouteID:      461,
+		PointID:      27,
+		TruckLat:     24.7,
+		TruckLng:     121.0,
+		GPSAvailable: true,
+		CollectedAt:  now,
+	}); err != nil {
+		t.Fatalf("InsertSample() returned error: %v", err)
+	}
+
+	dates, err := store.ListServiceDates(10)
+	if err != nil {
+		t.Fatalf("ListServiceDates() returned error: %v", err)
+	}
+	if len(dates) != 2 || dates[0] != "2026-04-13" {
+		t.Fatalf("unexpected service dates: %+v", dates)
+	}
+
+	samples, err := store.ListSamplesByServiceDate("2026-04-13")
+	if err != nil {
+		t.Fatalf("ListSamplesByServiceDate() returned error: %v", err)
+	}
+	if len(samples) != 1 || !samples[0].GPSAvailable {
+		t.Fatalf("unexpected samples: %+v", samples)
+	}
+}
