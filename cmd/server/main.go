@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -27,6 +29,9 @@ func main() {
 	}
 	if err := ensurePaths(cfg); err != nil {
 		log.Fatalf("Failed to prepare shared data paths: %v", err)
+	}
+	if err := migrateLegacyData(cfg); err != nil {
+		log.Fatalf("Failed to migrate legacy data paths: %v", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -144,4 +149,72 @@ func ensurePaths(cfg *config.Config) error {
 		}
 	}
 	return nil
+}
+
+func migrateLegacyData(cfg *config.Config) error {
+	for _, item := range []struct {
+		label  string
+		legacy string
+		target string
+	}{
+		{label: "state", legacy: "/data/state.json", target: cfg.StateFile},
+		{label: "history", legacy: "/data/history.db", target: cfg.DatabaseFile},
+	} {
+		migrated, err := migrateFileIfMissing(item.legacy, item.target)
+		if err != nil {
+			return fmt.Errorf("%s file migration failed: %w", item.label, err)
+		}
+		if migrated {
+			log.Printf("Migrated legacy %s file from %s to %s", item.label, item.legacy, item.target)
+		}
+	}
+	return nil
+}
+
+func migrateFileIfMissing(legacyPath, targetPath string) (bool, error) {
+	if samePath(legacyPath, targetPath) {
+		return false, nil
+	}
+
+	if _, err := os.Stat(targetPath); err == nil {
+		return false, nil
+	} else if !os.IsNotExist(err) {
+		return false, fmt.Errorf("stat target: %w", err)
+	}
+
+	legacyInfo, err := os.Stat(legacyPath)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("stat legacy: %w", err)
+	}
+	if legacyInfo.IsDir() {
+		return false, fmt.Errorf("legacy path is a directory: %s", legacyPath)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
+		return false, fmt.Errorf("ensure target directory: %w", err)
+	}
+
+	source, err := os.Open(legacyPath)
+	if err != nil {
+		return false, fmt.Errorf("open legacy file: %w", err)
+	}
+	defer source.Close()
+
+	target, err := os.OpenFile(targetPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		return false, fmt.Errorf("create target file: %w", err)
+	}
+	defer target.Close()
+
+	if _, err := io.Copy(target, source); err != nil {
+		return false, fmt.Errorf("copy file contents: %w", err)
+	}
+	return true, nil
+}
+
+func samePath(left, right string) bool {
+	return filepath.Clean(left) == filepath.Clean(right)
 }
