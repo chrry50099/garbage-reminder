@@ -150,7 +150,7 @@ func TestCheckOnceFallsBackToAPIWhenRouteShapeUnavailable(t *testing.T) {
 	}
 }
 
-func TestCheckOnceMarksRunCompletedOnArrival(t *testing.T) {
+func TestCheckOnceDoesNotMarkRunCompletedWhenTargetIsNear(t *testing.T) {
 	cfg := testConfig()
 	historyStore := newFakeHistoryStore()
 	service := NewService(cfg, &fakeEupfinClient{
@@ -159,6 +159,19 @@ func TestCheckOnceMarksRunCompletedOnArrival(t *testing.T) {
 		routes:   []eupfin.Route{baseRoute()},
 		cars: []eupfin.CarStatus{
 			{CarUnicode: "68715", LogGISX: 121.020320, LogGISY: 24.748448},
+		},
+		statuses: []eupfin.RouteStatus{
+			{
+				RouteID:          461,
+				RouteWaitingTime: 1,
+				Points: []eupfin.RouteStatusPoint{
+					{
+						PointID:       27,
+						EstimatedTime: "20:29",
+						WaitingTime:   1,
+					},
+				},
+			},
 		},
 	}, &fakeNotifier{}, &fakeNotifier{}, newFakeStore(), historyStore, nil)
 	service.now = func() time.Time {
@@ -173,8 +186,49 @@ func TestCheckOnceMarksRunCompletedOnArrival(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetRun() returned error: %v", err)
 	}
-	if run == nil || run.Status != "completed" {
-		t.Fatalf("expected run to be marked completed, got %+v", run)
+	if run == nil || run.Status != "collecting" {
+		t.Fatalf("expected run to stay collecting near target, got %+v", run)
+	}
+}
+
+func TestCheckOnceMarksRunCompletedWhenRouteFinishes(t *testing.T) {
+	cfg := testConfig()
+	historyStore := newFakeHistoryStore()
+	service := NewService(cfg, &fakeEupfinClient{
+		district: baseDistrict(),
+		target:   baseTarget(),
+		routes:   []eupfin.Route{baseRoute()},
+		cars: []eupfin.CarStatus{
+			{CarUnicode: "68715", LogGISX: 121.020320, LogGISY: 24.748448},
+		},
+		statuses: []eupfin.RouteStatus{
+			{
+				RouteID:          461,
+				RouteWaitingTime: -2,
+				Points: []eupfin.RouteStatusPoint{
+					{
+						PointID:       27,
+						EstimatedTime: "",
+						WaitingTime:   -2,
+					},
+				},
+			},
+		},
+	}, &fakeNotifier{}, &fakeNotifier{}, newFakeStore(), historyStore, nil)
+	service.now = func() time.Time {
+		return time.Date(2026, 4, 13, 21, 5, 0, 0, time.FixedZone("CST", 8*3600))
+	}
+
+	if err := service.CheckOnce(context.Background()); err != nil {
+		t.Fatalf("CheckOnce() returned error: %v", err)
+	}
+
+	run, err := historyStore.GetRun("2026-04-13")
+	if err != nil {
+		t.Fatalf("GetRun() returned error: %v", err)
+	}
+	if run == nil || run.Status != "completed" || run.ArrivalSource != "route_waiting_time_finished" {
+		t.Fatalf("expected run to be marked completed by route completion, got %+v", run)
 	}
 }
 

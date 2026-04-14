@@ -100,7 +100,7 @@ type liveObservation struct {
 	observation      history.Observation
 	apiEstimatedText string
 	apiWaitingTime   *int
-	arrivalSource    string
+	completionSource string
 }
 
 func NewService(
@@ -298,8 +298,8 @@ func (s *Service) CheckOnce(ctx context.Context) error {
 	}
 
 	runStatus := "collecting"
-	if live.arrivalSource != "" {
-		if err := s.history.MarkRunCompleted(serviceDate, now, live.arrivalSource); err != nil {
+	if live.completionSource != "" {
+		if err := s.history.MarkRunCompleted(serviceDate, now, live.completionSource); err != nil {
 			s.logCollectorError("mark_run_completed", serviceDate, now, err)
 			return fmt.Errorf("mark run completed: %w", err)
 		}
@@ -484,6 +484,7 @@ func (s *Service) collectLiveObservation(ctx context.Context, target *state.Cach
 
 	statuses, statusesErr := s.client.GetAllRouteStatusData(ctx, target.CustID)
 	if statusesErr == nil {
+		routeStatus := findRouteStatus(statuses, target.RouteID)
 		if pointStatus := findTargetPointStatus(statuses, target.RouteID, target.PointID); pointStatus != nil {
 			result.apiEstimatedText = strings.TrimSpace(pointStatus.EstimatedTime)
 			result.observation.APIEstimatedText = result.apiEstimatedText
@@ -495,6 +496,7 @@ func (s *Service) collectLiveObservation(ctx context.Context, target *state.Cach
 			result.apiWaitingTime = &waiting
 			result.observation.APIWaitingTime = &waiting
 		}
+		result.completionSource = detectRouteCompletion(routeStatus)
 	}
 
 	if carsErr != nil && statusesErr != nil {
@@ -503,7 +505,6 @@ func (s *Service) collectLiveObservation(ctx context.Context, target *state.Cach
 
 	s.projectObservation(&result.observation)
 
-	result.arrivalSource = detectArrival(result.observation, target, s.cfg.ArrivalRadiusMeters)
 	return result, nil
 }
 
@@ -695,6 +696,16 @@ func findTargetPointStatus(statuses []eupfin.RouteStatus, routeID, pointID int) 
 	return nil
 }
 
+func findRouteStatus(statuses []eupfin.RouteStatus, routeID int) *eupfin.RouteStatus {
+	for _, routeStatus := range statuses {
+		if routeStatus.RouteID == routeID {
+			copy := routeStatus
+			return &copy
+		}
+	}
+	return nil
+}
+
 func selectTargetCar(cars []eupfin.CarStatus, target *state.CachedTarget) (eupfin.CarStatus, bool) {
 	if target == nil {
 		return eupfin.CarStatus{}, false
@@ -725,6 +736,24 @@ func carCoordinates(car eupfin.CarStatus) (float64, float64, bool) {
 		return car.GISY, car.GISX, true
 	}
 	return 0, 0, false
+}
+
+func detectRouteCompletion(routeStatus *eupfin.RouteStatus) string {
+	if routeStatus == nil {
+		return ""
+	}
+	if routeStatus.RouteWaitingTime == -2 {
+		return "route_waiting_time_finished"
+	}
+	if len(routeStatus.Points) == 0 {
+		return ""
+	}
+	for _, point := range routeStatus.Points {
+		if point.WaitingTime != -2 {
+			return ""
+		}
+	}
+	return "point_waiting_time_finished"
 }
 
 func detectArrival(observation history.Observation, target *state.CachedTarget, arrivalRadiusMeters float64) string {

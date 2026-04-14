@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.4
+
+- Stop ending the collection run when the truck is merely near 有謙家園 or the target stop ETA reaches one minute
+- Mark a run completed only after the route status reports the full trip has finished
+
 ## 0.6.3
 
 - Fix garbage truck GPS collection to use Eupfin `Log_GISX` / `Log_GISY` when `GISX` / `GISY` are empty
