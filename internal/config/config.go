@@ -11,7 +11,7 @@ import (
 
 const (
 	defaultEupfinBaseURL   = "https://customer-tw.eupfin.com/Eup_Servlet_Nuser_SOAP/Eup_Servlet_Nuser_SOAP"
-	defaultTargetDays      = "MON,TUE,WED,THU,FRI,SAT"
+	defaultTargetDays      = "MON,TUE,THU,FRI,SAT"
 	defaultCollectionStart = "19:00"
 	defaultCollectionEnd   = "21:30"
 )

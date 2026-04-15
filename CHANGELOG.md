@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.5
+
+- Change the default collection days for 寶山鄉雙溪線 to Monday, Tuesday, Thursday, Friday, and Saturday
+
 ## 0.6.4
 
 - Stop ending the collection run when the truck is merely near 有謙家園 or the target stop ETA reaches one minute

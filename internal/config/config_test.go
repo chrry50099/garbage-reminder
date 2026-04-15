@@ -55,7 +55,7 @@ func TestLoadParsesCollectionDefaults(t *testing.T) {
 	if cfg.TargetCustID != 5005808 {
 		t.Fatalf("unexpected target cust id: %d", cfg.TargetCustID)
 	}
-	if len(cfg.TargetDays) != 6 {
+	if len(cfg.TargetDays) != 5 {
 		t.Fatalf("unexpected target days length: %d", len(cfg.TargetDays))
 	}
 	if cfg.CheckInterval != 20*time.Second {
@@ -112,7 +112,7 @@ func setRequiredEnv(t *testing.T) {
 		"TARGET_ROUTE_ID":    "461",
 		"TARGET_POINT_SEQ":   "27",
 		"TARGET_POINT_NAME":  "有謙家園",
-		"TARGET_DAYS":        "MON,TUE,WED,THU,FRI,SAT",
+		"TARGET_DAYS":        "MON,TUE,THU,FRI,SAT",
 		"ALERT_OFFSETS":      "10,3",
 		"HA_BASE_URL":        "http://homeassistant.local:8123",
 		"HA_TOKEN":           "token",
@@ -158,7 +158,7 @@ func setRequiredEnvWithoutHA(t *testing.T) {
 		"TARGET_ROUTE_ID":    "461",
 		"TARGET_POINT_SEQ":   "27",
 		"TARGET_POINT_NAME":  "有謙家園",
-		"TARGET_DAYS":        "MON,TUE,WED,THU,FRI,SAT",
+		"TARGET_DAYS":        "MON,TUE,THU,FRI,SAT",
 		"ALERT_OFFSETS":      "10,3",
 		"HA_NOTIFY_MODE":     "webhook",
 		"HA_TTS_TARGET":      "garbage_truck",
