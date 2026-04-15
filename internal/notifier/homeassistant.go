@@ -78,7 +78,7 @@ func NewHomeAssistant(baseURL, token, mode, target string) *HomeAssistant {
 
 func (h *HomeAssistant) SendMessage(ctx context.Context, text string) error {
 	body, err := json.Marshal(haMessagePayload{
-		Message: text,
+		Message: summarizeForSpeech(text),
 		Source:  "garbage-tracing",
 	})
 	if err != nil {
@@ -106,6 +106,60 @@ func (h *HomeAssistant) SendMessage(ctx context.Context, text string) error {
 	}
 
 	return nil
+}
+
+func summarizeForSpeech(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return text
+	}
+	if !strings.Contains(text, "垃圾車提醒") {
+		return text
+	}
+
+	var (
+		offsetText    string
+		pointName     string
+		remainingText string
+	)
+
+	lines := strings.Split(text, "\n")
+	for _, rawLine := range lines {
+		line := strings.TrimSpace(rawLine)
+		switch {
+		case strings.Contains(line, "垃圾車提醒（") && strings.Contains(line, "分鐘門檻"):
+			start := strings.Index(line, "（")
+			end := strings.Index(line, "分鐘門檻")
+			if start >= 0 && end > start {
+				offsetText = strings.TrimSpace(line[start+len("（") : end])
+			}
+		case strings.HasPrefix(line, "站點："):
+			value := strings.TrimSpace(strings.TrimPrefix(line, "站點："))
+			if idx := strings.Index(value, "（"); idx >= 0 {
+				value = strings.TrimSpace(value[:idx])
+			}
+			pointName = value
+		case strings.HasPrefix(line, "剩餘時間："):
+			value := strings.TrimSpace(strings.TrimPrefix(line, "剩餘時間："))
+			value = strings.TrimSuffix(value, "分鐘")
+			value = strings.TrimSpace(value)
+			if value != "" {
+				remainingText = value
+			}
+		}
+	}
+
+	if remainingText == "" {
+		remainingText = offsetText
+	}
+	if remainingText == "" {
+		remainingText = "幾"
+	}
+	if pointName == "" {
+		pointName = "指定站點"
+	}
+
+	return fmt.Sprintf("垃圾車快到了，約 %s 分鐘後到 %s，請準備倒垃圾。", remainingText, pointName)
 }
 
 func (h *HomeAssistant) ListBroadcastOptions(ctx context.Context) (*BroadcastOptions, error) {
@@ -202,8 +256,8 @@ func (h *HomeAssistant) SendTestBroadcast(ctx context.Context, request Broadcast
 		}
 
 		payload := map[string]interface{}{
-			"entity_id":         targetEntityID,
-			"media_content_id":  mediaURL,
+			"entity_id":          targetEntityID,
+			"media_content_id":   mediaURL,
 			"media_content_type": "music",
 		}
 

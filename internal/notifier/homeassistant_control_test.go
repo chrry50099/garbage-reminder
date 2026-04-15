@@ -3,6 +3,7 @@ package notifier
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -231,5 +232,31 @@ func TestSendTestBroadcastFallsBackWhenPrimaryTTSProxyFails(t *testing.T) {
 	}
 	if len(requestedEngines) < 2 || requestedEngines[0] != "tts.google_ai_tts" || requestedEngines[1] != "tts.google_en_com" {
 		t.Fatalf("unexpected engine order: %+v", requestedEngines)
+	}
+}
+
+func TestSendMessageSummarizesSpeechPayload(t *testing.T) {
+	var payload haMessagePayload
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read body: %v", err)
+		}
+		if err := json.Unmarshal(body, &payload); err != nil {
+			t.Fatalf("unmarshal payload: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	client := NewHomeAssistant(server.URL, "token", "webhook", "garbage")
+	err := client.SendMessage(context.Background(), "🗑️ 垃圾車提醒（3 分鐘門檻）\n路線：雙溪線\n站點：有謙家園（第 27 站）\n目前時間：2026-04-15 20:10\n預測到站：2026-04-15 20:13\n剩餘時間：3 分鐘\n資料來源：api_estimated_time")
+	if err != nil {
+		t.Fatalf("SendMessage() error: %v", err)
+	}
+
+	expected := "垃圾車快到了，約 3 分鐘後到 有謙家園，請準備倒垃圾。"
+	if payload.Message != expected {
+		t.Fatalf("unexpected speech payload: %q", payload.Message)
 	}
 }

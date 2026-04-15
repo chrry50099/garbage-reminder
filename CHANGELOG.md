@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.6
+
+- Make HomePod / Home Assistant speech alerts shorter and more natural while keeping Telegram alerts detailed
+
 ## 0.6.5
 
 - Change the default collection days for 寶山鄉雙溪線 to Monday, Tuesday, Thursday, Friday, and Saturday
