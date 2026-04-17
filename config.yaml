@@ -1,5 +1,5 @@
 name: "Garbage ETA Predictor"
-version: "0.6.8"
+version: "0.6.9"
 slug: "garbage_eta_predictor"
 description: >-
   Collects garbage truck GPS history, predicts arrival time for 有謙家園,

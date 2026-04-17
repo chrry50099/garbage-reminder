@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.9
+
+- Normalize explicit TTS language codes like `zh-TW` to the lowercase hyphenated format Home Assistant actually accepts, such as `zh-tw`
+
 ## 0.6.8
 
 - Make the historical sample table and status JSON panels scroll within fixed-height containers

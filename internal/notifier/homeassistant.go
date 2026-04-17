@@ -144,7 +144,7 @@ func (h *HomeAssistant) SaveAutoBroadcastSettings(ctx context.Context, settings 
 	normalized := AutomaticBroadcastSettings{
 		TargetEntityIDs: normalizeEntityIDs(settings.TargetEntityIDs, "media_player."),
 		TTSEntityID:     strings.TrimSpace(settings.TTSEntityID),
-		Language:        strings.TrimSpace(settings.Language),
+		Language:        normalizeLanguageCode(settings.Language),
 		Voice:           strings.TrimSpace(settings.Voice),
 	}
 	if normalized.TTSEntityID == "" {
@@ -450,7 +450,7 @@ func (h *HomeAssistant) generateTTSMediaURL(ctx context.Context, ttsEntityID str
 		Message:  strings.TrimSpace(request.Message),
 		Cache:    true,
 	}
-	if language := strings.TrimSpace(request.Language); language != "" && supportsExplicitLanguage(ttsEntityID) {
+	if language := normalizeLanguageCode(request.Language); language != "" && supportsExplicitLanguage(ttsEntityID) {
 		payload.Language = language
 	}
 	if voice := resolveVoiceOption(ttsEntityID, request.Voice); voice != "" {
@@ -596,6 +596,17 @@ func resolveVoiceOption(entityID, requestedVoice string) string {
 	default:
 		return ""
 	}
+}
+
+func normalizeLanguageCode(value string) string {
+	language := strings.TrimSpace(value)
+	if language == "" {
+		return ""
+	}
+
+	language = strings.ReplaceAll(language, "_", "-")
+	language = strings.ToLower(language)
+	return language
 }
 
 func (h *HomeAssistant) defaultAutomaticTargetEntityIDs(options *BroadcastOptions) []string {
