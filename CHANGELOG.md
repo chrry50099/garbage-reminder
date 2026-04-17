@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.0
+
+- Add an optional direct Google Cloud Text-to-Speech provider while keeping the existing Home Assistant TTS engines available
+- Add dashboard controls for Google Cloud TTS voice selection, input mode, speaking rate, pitch, volume gain, effects profile, and style prompt testing
+- Allow automatic HomePod alerts to use either Home Assistant TTS or the direct Google Cloud TTS path with persisted settings
+
 ## 0.6.9
 
 - Normalize explicit TTS language codes like `zh-TW` to the lowercase hyphenated format Home Assistant actually accepts, such as `zh-tw`

@@ -57,6 +57,7 @@ func main() {
 	telegramNotifier := notifier.NewTelegram(cfg.TelegramBotToken, cfg.TelegramChatID)
 	haNotifier := notifier.NewHomeAssistant(cfg.HABaseURL, cfg.HAToken, cfg.HANotifyMode, cfg.HATTSTarget)
 	haNotifier.SetStateStore(localState)
+	haNotifier.SetGoogleCloud(notifier.NewGoogleCloudTTS(cfg.GoogleCloudTTSAPIKey, cfg.GoogleCloudMediaDir))
 	alertNotifier := notifier.NewMultiSender(telegramNotifier, haNotifier)
 	service := reminder.NewService(cfg, eupfinClient, alertNotifier, telegramNotifier, localState, historyStore, collectorLog)
 
@@ -145,6 +146,7 @@ func ensurePaths(cfg *config.Config) error {
 		filepath.Dir(cfg.DatabaseFile),
 		filepath.Dir(cfg.CollectorLogFile),
 		cfg.ExportsDir,
+		cfg.GoogleCloudMediaDir,
 	} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err

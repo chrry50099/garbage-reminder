@@ -21,6 +21,7 @@ type HomeAssistant struct {
 	target     string
 	httpClient *http.Client
 	stateStore *state.LocalStore
+	googleCloud *GoogleCloudTTS
 }
 
 type haMessagePayload struct {
@@ -38,6 +39,7 @@ type BroadcastOptions struct {
 	MediaPlayers     []BroadcastEntityOption `json:"media_players"`
 	TTSEntities      []BroadcastEntityOption `json:"tts_entities"`
 	DefaultTTSEntity string                  `json:"default_tts_entity,omitempty"`
+	GoogleCloudVoices []GoogleCloudVoiceOption `json:"google_cloud_voices,omitempty"`
 }
 
 type BroadcastRequest struct {
@@ -46,6 +48,12 @@ type BroadcastRequest struct {
 	TTSEntityID     string   `json:"tts_entity_id,omitempty"`
 	Language        string   `json:"language,omitempty"`
 	Voice           string   `json:"voice,omitempty"`
+	InputMode       string   `json:"input_mode,omitempty"`
+	SpeakingRate    float64  `json:"speaking_rate,omitempty"`
+	Pitch           float64  `json:"pitch,omitempty"`
+	VolumeGainDB    float64  `json:"volume_gain_db,omitempty"`
+	EffectsProfileID string  `json:"effects_profile_id,omitempty"`
+	StylePrompt     string   `json:"style_prompt,omitempty"`
 }
 
 type AutomaticBroadcastSettings struct {
@@ -53,6 +61,12 @@ type AutomaticBroadcastSettings struct {
 	TTSEntityID     string   `json:"tts_entity_id,omitempty"`
 	Language        string   `json:"language,omitempty"`
 	Voice           string   `json:"voice,omitempty"`
+	InputMode       string   `json:"input_mode,omitempty"`
+	SpeakingRate    float64  `json:"speaking_rate,omitempty"`
+	Pitch           float64  `json:"pitch,omitempty"`
+	VolumeGainDB    float64  `json:"volume_gain_db,omitempty"`
+	EffectsProfileID string  `json:"effects_profile_id,omitempty"`
+	StylePrompt     string   `json:"style_prompt,omitempty"`
 }
 
 type ttsGetURLRequest struct {
@@ -90,6 +104,10 @@ func (h *HomeAssistant) SetStateStore(store *state.LocalStore) {
 	h.stateStore = store
 }
 
+func (h *HomeAssistant) SetGoogleCloud(provider *GoogleCloudTTS) {
+	h.googleCloud = provider
+}
+
 func (h *HomeAssistant) SendMessage(ctx context.Context, text string) error {
 	speechText := summarizeForSpeech(text)
 	if err := h.sendDirectSpeech(ctx, speechText); err == nil {
@@ -116,6 +134,12 @@ func (h *HomeAssistant) GetAutoBroadcastSettings(ctx context.Context) (*Automati
 			settings.TTSEntityID = strings.TrimSpace(saved.TTSEntityID)
 			settings.Language = strings.TrimSpace(saved.Language)
 			settings.Voice = strings.TrimSpace(saved.Voice)
+			settings.InputMode = strings.TrimSpace(saved.InputMode)
+			settings.SpeakingRate = saved.SpeakingRate
+			settings.Pitch = saved.Pitch
+			settings.VolumeGainDB = saved.VolumeGainDB
+			settings.EffectsProfileID = strings.TrimSpace(saved.EffectsProfileID)
+			settings.StylePrompt = strings.TrimSpace(saved.StylePrompt)
 		}
 	}
 
@@ -127,6 +151,14 @@ func (h *HomeAssistant) GetAutoBroadcastSettings(ctx context.Context) (*Automati
 			settings.Voice = "achernar"
 		}
 		settings.Language = ""
+	}
+	if isGoogleCloudDirectEntity(settings.TTSEntityID) {
+		if settings.Language == "" {
+			settings.Language = "cmn-TW"
+		}
+		if settings.InputMode == "" {
+			settings.InputMode = "text"
+		}
 	}
 	if len(settings.TargetEntityIDs) == 0 {
 		settings.TargetEntityIDs = h.defaultAutomaticTargetEntityIDs(options)
@@ -146,6 +178,12 @@ func (h *HomeAssistant) SaveAutoBroadcastSettings(ctx context.Context, settings 
 		TTSEntityID:     strings.TrimSpace(settings.TTSEntityID),
 		Language:        normalizeLanguageCode(settings.Language),
 		Voice:           strings.TrimSpace(settings.Voice),
+		InputMode:       normalizeInputMode(settings.InputMode),
+		SpeakingRate:    settings.SpeakingRate,
+		Pitch:           settings.Pitch,
+		VolumeGainDB:    settings.VolumeGainDB,
+		EffectsProfileID: strings.TrimSpace(settings.EffectsProfileID),
+		StylePrompt:     strings.TrimSpace(settings.StylePrompt),
 	}
 	if normalized.TTSEntityID == "" {
 		normalized.TTSEntityID = options.DefaultTTSEntity
@@ -165,10 +203,28 @@ func (h *HomeAssistant) SaveAutoBroadcastSettings(ctx context.Context, settings 
 	if !supportsExplicitLanguage(normalized.TTSEntityID) {
 		normalized.Language = ""
 	}
+	if !supportsInputMode(normalized.TTSEntityID) {
+		normalized.InputMode = ""
+	}
 	if resolveVoiceOption(normalized.TTSEntityID, normalized.Voice) == "" {
 		normalized.Voice = ""
 	} else {
 		normalized.Voice = resolveVoiceOption(normalized.TTSEntityID, normalized.Voice)
+	}
+	if !supportsProsodyControls(normalized.TTSEntityID) {
+		normalized.SpeakingRate = 0
+		normalized.Pitch = 0
+		normalized.VolumeGainDB = 0
+		normalized.EffectsProfileID = ""
+	}
+	if !supportsStylePrompt(normalized.TTSEntityID) {
+		normalized.StylePrompt = ""
+	}
+	if isGoogleCloudDirectEntity(normalized.TTSEntityID) && normalized.Language == "" {
+		normalized.Language = "cmn-TW"
+	}
+	if isGoogleCloudDirectEntity(normalized.TTSEntityID) && normalized.InputMode == "" {
+		normalized.InputMode = "text"
 	}
 
 	if h.stateStore != nil {
@@ -177,6 +233,12 @@ func (h *HomeAssistant) SaveAutoBroadcastSettings(ctx context.Context, settings 
 			TTSEntityID:     normalized.TTSEntityID,
 			Language:        normalized.Language,
 			Voice:           normalized.Voice,
+			InputMode:       normalized.InputMode,
+			SpeakingRate:    normalized.SpeakingRate,
+			Pitch:           normalized.Pitch,
+			VolumeGainDB:    normalized.VolumeGainDB,
+			EffectsProfileID: normalized.EffectsProfileID,
+			StylePrompt:     normalized.StylePrompt,
 		}); err != nil {
 			return nil, fmt.Errorf("persist automatic broadcast settings: %w", err)
 		}
@@ -270,7 +332,7 @@ func (h *HomeAssistant) ListBroadcastOptions(ctx context.Context) (*BroadcastOpt
 			State:        strings.TrimSpace(state.State),
 		}
 
-		switch {
+	switch {
 		case strings.HasPrefix(state.EntityID, "tts."):
 			ttsEntities = append(ttsEntities, option)
 		case strings.HasPrefix(state.EntityID, "media_player."):
@@ -290,10 +352,22 @@ func (h *HomeAssistant) ListBroadcastOptions(ctx context.Context) (*BroadcastOpt
 		players = allPlayers
 	}
 
+	voices := make([]GoogleCloudVoiceOption, 0)
+	if h.googleCloud != nil && h.googleCloud.Enabled() {
+		ttsEntities = append(ttsEntities, BroadcastEntityOption{
+			EntityID:     googleCloudDirectEntityID,
+			FriendlyName: "Google Cloud TTS (Direct API)",
+			State:        "ready",
+		})
+		voices, _ = h.googleCloud.ListVoices(ctx, "cmn-TW")
+		sortOptions(ttsEntities)
+	}
+
 	return &BroadcastOptions{
 		MediaPlayers:     players,
 		TTSEntities:      ttsEntities,
 		DefaultTTSEntity: preferredTTSEntity(ttsEntities),
+		GoogleCloudVoices: voices,
 	}, nil
 }
 
@@ -319,6 +393,12 @@ func (h *HomeAssistant) SendTestBroadcast(ctx context.Context, request Broadcast
 	}
 	if ttsEntityID == "" {
 		return fmt.Errorf("no TTS entity available")
+	}
+
+	request = normalizeBroadcastRequest(request)
+	request.Message = applyStylePrompt(request.Message, request.StylePrompt, ttsEntityID)
+	if isGoogleCloudDirectEntity(ttsEntityID) {
+		return h.sendGoogleCloudBroadcast(ctx, request)
 	}
 
 	mediaURL, usedTTSEntityID, err := h.resolveBroadcastMediaURL(ctx, request, ttsEntityID)
@@ -372,11 +452,17 @@ func (h *HomeAssistant) sendDirectSpeech(ctx context.Context, text string) error
 	}
 
 	return h.SendTestBroadcast(ctx, BroadcastRequest{
-		Message:         text,
+		Message:         applyStylePrompt(text, settings.StylePrompt, settings.TTSEntityID),
 		TargetEntityIDs: settings.TargetEntityIDs,
 		TTSEntityID:     settings.TTSEntityID,
 		Language:        settings.Language,
 		Voice:           settings.Voice,
+		InputMode:       settings.InputMode,
+		SpeakingRate:    settings.SpeakingRate,
+		Pitch:           settings.Pitch,
+		VolumeGainDB:    settings.VolumeGainDB,
+		EffectsProfileID: settings.EffectsProfileID,
+		StylePrompt:     settings.StylePrompt,
 	})
 }
 
@@ -410,6 +496,50 @@ func (h *HomeAssistant) resolveBroadcastMediaURL(ctx context.Context, request Br
 		return "", "", fmt.Errorf("no usable TTS engine found")
 	}
 	return "", "", fmt.Errorf("no usable TTS engine found: %s", strings.Join(failures, "; "))
+}
+
+func (h *HomeAssistant) sendGoogleCloudBroadcast(ctx context.Context, request BroadcastRequest) error {
+	if h.googleCloud == nil || !h.googleCloud.Enabled() {
+		return fmt.Errorf("google cloud tts is not configured")
+	}
+
+	request = normalizeBroadcastRequest(request)
+	request.Message = applyStylePrompt(request.Message, request.StylePrompt, request.TTSEntityID)
+	mediaSourceID, err := h.googleCloud.SynthesizeToMediaSource(ctx, request)
+	if err != nil {
+		return err
+	}
+
+	for _, targetEntityID := range request.TargetEntityIDs {
+		targetEntityID = strings.TrimSpace(targetEntityID)
+		if targetEntityID == "" {
+			continue
+		}
+		payload := map[string]interface{}{
+			"entity_id":          targetEntityID,
+			"media_content_id":   mediaSourceID,
+			"media_content_type": "music",
+		}
+		body, err := json.Marshal(payload)
+		if err != nil {
+			return fmt.Errorf("marshal media player payload: %w", err)
+		}
+		endpoint := fmt.Sprintf("%s/api/services/media_player/play_media", h.baseURL)
+		resp, err := h.do(ctx, http.MethodPost, endpoint, body)
+		if err != nil {
+			return fmt.Errorf("send play_media request: %w", err)
+		}
+		respBody, readErr := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if readErr != nil {
+			return fmt.Errorf("read play_media response: %w", readErr)
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return fmt.Errorf("play_media failed for %s using google cloud tts with status %d: %s", targetEntityID, resp.StatusCode, strings.TrimSpace(string(respBody)))
+		}
+	}
+
+	return nil
 }
 
 func (h *HomeAssistant) sendLegacyMessage(ctx context.Context, text string) error {
@@ -593,6 +723,8 @@ func resolveVoiceOption(entityID, requestedVoice string) string {
 			return value
 		}
 		return "achernar"
+	case googleCloudDirectEntityID:
+		return value
 	default:
 		return ""
 	}
@@ -607,6 +739,18 @@ func normalizeLanguageCode(value string) string {
 	language = strings.ReplaceAll(language, "_", "-")
 	language = strings.ToLower(language)
 	return language
+}
+
+func normalizeInputMode(value string) string {
+	mode := strings.ToLower(strings.TrimSpace(value))
+	switch mode {
+	case "", "text":
+		return "text"
+	case "ssml":
+		return "ssml"
+	default:
+		return "text"
+	}
 }
 
 func (h *HomeAssistant) defaultAutomaticTargetEntityIDs(options *BroadcastOptions) []string {
@@ -649,6 +793,65 @@ func containsEntity(options []BroadcastEntityOption, entityID string) bool {
 		}
 	}
 	return false
+}
+
+func isGoogleCloudDirectEntity(entityID string) bool {
+	return strings.EqualFold(strings.TrimSpace(entityID), googleCloudDirectEntityID)
+}
+
+func supportsInputMode(entityID string) bool {
+	return isGoogleCloudDirectEntity(entityID)
+}
+
+func supportsProsodyControls(entityID string) bool {
+	return isGoogleCloudDirectEntity(entityID)
+}
+
+func supportsStylePrompt(entityID string) bool {
+	value := strings.ToLower(strings.TrimSpace(entityID))
+	return value == "tts.google_ai_tts" || value == "tts.google_generative_ai_tts"
+}
+
+func applyStylePrompt(message, stylePrompt, entityID string) string {
+	if !supportsStylePrompt(entityID) {
+		return message
+	}
+	style := strings.TrimSpace(stylePrompt)
+	if style == "" {
+		return message
+	}
+	return strings.TrimSpace(style) + "：" + strings.TrimSpace(message)
+}
+
+func normalizeBroadcastRequest(request BroadcastRequest) BroadcastRequest {
+	request.Language = normalizeLanguageCode(request.Language)
+	request.InputMode = normalizeInputMode(request.InputMode)
+	request.EffectsProfileID = strings.TrimSpace(request.EffectsProfileID)
+	request.StylePrompt = strings.TrimSpace(request.StylePrompt)
+	if isGoogleCloudDirectEntity(request.TTSEntityID) {
+		if request.Language == "" {
+			request.Language = "cmn-TW"
+		}
+		if request.InputMode == "" {
+			request.InputMode = "text"
+		}
+	}
+	if !supportsExplicitLanguage(request.TTSEntityID) {
+		request.Language = ""
+	}
+	if !supportsInputMode(request.TTSEntityID) {
+		request.InputMode = ""
+	}
+	if !supportsProsodyControls(request.TTSEntityID) {
+		request.SpeakingRate = 0
+		request.Pitch = 0
+		request.VolumeGainDB = 0
+		request.EffectsProfileID = ""
+	}
+	if !supportsStylePrompt(request.TTSEntityID) {
+		request.StylePrompt = ""
+	}
+	return request
 }
 
 func containsAllEntities(options []BroadcastEntityOption, entityIDs []string) bool {

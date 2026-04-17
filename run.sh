@@ -6,6 +6,7 @@ bashio::log.info "Starting Garbage ETA Predictor"
 
 export TELEGRAM_BOT_TOKEN="$(bashio::config 'telegram_bot_token')"
 export TELEGRAM_CHAT_ID="$(bashio::config 'telegram_chat_id')"
+export GOOGLE_CLOUD_TTS_API_KEY="$(bashio::config 'google_cloud_tts_api_key')"
 
 export HA_NOTIFY_MODE="$(bashio::config 'ha_notify_mode')"
 export HA_TTS_TARGET="$(bashio::config 'ha_tts_target')"
@@ -43,7 +44,8 @@ export STATE_FILE="/share/garbage_eta/state.json"
 export DATABASE_FILE="/share/garbage_eta/history.db"
 export COLLECTOR_LOG_FILE="/share/garbage_eta/logs/collector.log"
 export EXPORTS_DIR="/share/garbage_eta/exports"
+export GOOGLE_CLOUD_MEDIA_DIR="/media/garbage_eta/generated"
 
-mkdir -p /share/garbage_eta /share/garbage_eta/logs /share/garbage_eta/exports
+mkdir -p /share/garbage_eta /share/garbage_eta/logs /share/garbage_eta/exports /media/garbage_eta/generated
 
 exec /app/server

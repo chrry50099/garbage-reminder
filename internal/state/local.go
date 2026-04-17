@@ -40,6 +40,12 @@ type AutoBroadcastSettings struct {
 	TTSEntityID     string   `json:"tts_entity_id,omitempty"`
 	Language        string   `json:"language,omitempty"`
 	Voice           string   `json:"voice,omitempty"`
+	InputMode       string   `json:"input_mode,omitempty"`
+	SpeakingRate    float64  `json:"speaking_rate,omitempty"`
+	Pitch           float64  `json:"pitch,omitempty"`
+	VolumeGainDB    float64  `json:"volume_gain_db,omitempty"`
+	EffectsProfileID string  `json:"effects_profile_id,omitempty"`
+	StylePrompt     string   `json:"style_prompt,omitempty"`
 }
 
 type AppState struct {

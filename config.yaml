@@ -1,5 +1,5 @@
 name: "Garbage ETA Predictor"
-version: "0.6.9"
+version: "0.7.0"
 slug: "garbage_eta_predictor"
 description: >-
   Collects garbage truck GPS history, predicts arrival time for 有謙家園,
@@ -21,6 +21,8 @@ arch:
 map:
   - type: share
     read_only: false
+  - type: media
+    read_only: false
 ports:
   8080/tcp: null
 ports_description:
@@ -32,6 +34,7 @@ timeout: 60
 options:
   telegram_bot_token: ""
   telegram_chat_id: ""
+  google_cloud_tts_api_key: ""
   ha_notify_mode: "webhook"
   ha_tts_target: "garbage_truck_eta"
   target_cust_id: 5005808
@@ -56,6 +59,7 @@ options:
 schema:
   telegram_bot_token: password
   telegram_chat_id: str
+  google_cloud_tts_api_key: password?
   ha_notify_mode: str
   ha_tts_target: str
   target_cust_id: int

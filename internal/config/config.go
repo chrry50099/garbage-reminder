@@ -54,6 +54,9 @@ type Config struct {
 	HAToken      string
 	HANotifyMode string
 	HATTSTarget  string
+
+	GoogleCloudTTSAPIKey string
+	GoogleCloudMediaDir  string
 }
 
 func Load() (*Config, error) {
@@ -142,12 +145,15 @@ func Load() (*Config, error) {
 		HAToken:      firstNonEmpty(os.Getenv("HA_TOKEN"), supervisorToken),
 		HANotifyMode: strings.TrimSpace(os.Getenv("HA_NOTIFY_MODE")),
 		HATTSTarget:  strings.TrimSpace(os.Getenv("HA_TTS_TARGET")),
+
+		GoogleCloudTTSAPIKey: strings.TrimSpace(os.Getenv("GOOGLE_CLOUD_TTS_API_KEY")),
 	}
 	cfg.SharedDataDir = getEnvOrDefault("SHARED_DATA_DIR", "/share/garbage_eta")
 	cfg.StateFile = getEnvOrDefault("STATE_FILE", filepath.Join(cfg.SharedDataDir, "state.json"))
 	cfg.DatabaseFile = getEnvOrDefault("DATABASE_FILE", filepath.Join(cfg.SharedDataDir, "history.db"))
 	cfg.CollectorLogFile = getEnvOrDefault("COLLECTOR_LOG_FILE", filepath.Join(cfg.SharedDataDir, "logs", "collector.log"))
 	cfg.ExportsDir = getEnvOrDefault("EXPORTS_DIR", filepath.Join(cfg.SharedDataDir, "exports"))
+	cfg.GoogleCloudMediaDir = getEnvOrDefault("GOOGLE_CLOUD_MEDIA_DIR", "/media/garbage_eta/generated")
 
 	cfg.TargetCustID, err = parseRequiredIntEnv("TARGET_CUST_ID")
 	if err != nil {
@@ -247,6 +253,9 @@ func (c *Config) Validate() error {
 	}
 	if strings.TrimSpace(c.ExportsDir) == "" {
 		return fmt.Errorf("EXPORTS_DIR is required")
+	}
+	if strings.TrimSpace(c.GoogleCloudMediaDir) == "" {
+		return fmt.Errorf("GOOGLE_CLOUD_MEDIA_DIR is required")
 	}
 	if c.HistoryWeeks <= 0 {
 		return fmt.Errorf("HISTORY_WEEKS must be greater than 0")
