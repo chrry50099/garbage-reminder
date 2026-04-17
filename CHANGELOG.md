@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.8
+
+- Make the historical sample table and status JSON panels scroll within fixed-height containers
+- Add a dedicated UI section for automatic HomePod alert settings so the formal garbage-truck broadcast can choose its TTS engine, voice, language, and target players
+
 ## 0.6.7
 
 - Make automatic HomePod alerts use the same direct TTS playback path as the test broadcast flow

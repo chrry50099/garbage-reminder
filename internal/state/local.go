@@ -35,9 +35,17 @@ type DeliveryRecord struct {
 	SentAt                time.Time `json:"sent_at"`
 }
 
+type AutoBroadcastSettings struct {
+	TargetEntityIDs []string `json:"target_entity_ids,omitempty"`
+	TTSEntityID     string   `json:"tts_entity_id,omitempty"`
+	Language        string   `json:"language,omitempty"`
+	Voice           string   `json:"voice,omitempty"`
+}
+
 type AppState struct {
-	CachedTarget *CachedTarget             `json:"cached_target,omitempty"`
-	Deliveries   map[string]DeliveryRecord `json:"deliveries"`
+	CachedTarget          *CachedTarget             `json:"cached_target,omitempty"`
+	Deliveries            map[string]DeliveryRecord `json:"deliveries"`
+	AutoBroadcastSettings *AutoBroadcastSettings    `json:"auto_broadcast_settings,omitempty"`
 }
 
 type LocalStore struct {
@@ -142,6 +150,30 @@ func (s *LocalStore) ListDeliveriesForDate(serviceDate string) []DeliveryRecord 
 		}
 	}
 	return results
+}
+
+func (s *LocalStore) GetAutoBroadcastSettings() *AutoBroadcastSettings {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.state.AutoBroadcastSettings == nil {
+		return nil
+	}
+
+	copy := *s.state.AutoBroadcastSettings
+	copy.TargetEntityIDs = append([]string(nil), s.state.AutoBroadcastSettings.TargetEntityIDs...)
+	return &copy
+}
+
+func (s *LocalStore) SaveAutoBroadcastSettings(settings AutoBroadcastSettings) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	copy := settings
+	copy.TargetEntityIDs = append([]string(nil), settings.TargetEntityIDs...)
+	s.state.AutoBroadcastSettings = &copy
+
+	return s.persistLocked()
 }
 
 func (s *LocalStore) persistLocked() error {

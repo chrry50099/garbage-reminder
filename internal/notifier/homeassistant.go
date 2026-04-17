@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"telegram-garbage-reminder/internal/state"
 )
 
 type HomeAssistant struct {
@@ -18,6 +20,7 @@ type HomeAssistant struct {
 	mode       string
 	target     string
 	httpClient *http.Client
+	stateStore *state.LocalStore
 }
 
 type haMessagePayload struct {
@@ -40,6 +43,13 @@ type BroadcastOptions struct {
 type BroadcastRequest struct {
 	Message         string   `json:"message"`
 	TargetEntityIDs []string `json:"target_entity_ids"`
+	TTSEntityID     string   `json:"tts_entity_id,omitempty"`
+	Language        string   `json:"language,omitempty"`
+	Voice           string   `json:"voice,omitempty"`
+}
+
+type AutomaticBroadcastSettings struct {
+	TargetEntityIDs []string `json:"target_entity_ids,omitempty"`
 	TTSEntityID     string   `json:"tts_entity_id,omitempty"`
 	Language        string   `json:"language,omitempty"`
 	Voice           string   `json:"voice,omitempty"`
@@ -76,6 +86,10 @@ func NewHomeAssistant(baseURL, token, mode, target string) *HomeAssistant {
 	}
 }
 
+func (h *HomeAssistant) SetStateStore(store *state.LocalStore) {
+	h.stateStore = store
+}
+
 func (h *HomeAssistant) SendMessage(ctx context.Context, text string) error {
 	speechText := summarizeForSpeech(text)
 	if err := h.sendDirectSpeech(ctx, speechText); err == nil {
@@ -87,6 +101,88 @@ func (h *HomeAssistant) SendMessage(ctx context.Context, text string) error {
 			return fmt.Errorf("direct home assistant playback failed: %v; fallback failed: %w", err, fallbackErr)
 		}
 	}
+}
+
+func (h *HomeAssistant) GetAutoBroadcastSettings(ctx context.Context) (*AutomaticBroadcastSettings, error) {
+	options, err := h.ListBroadcastOptions(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	settings := AutomaticBroadcastSettings{}
+	if h.stateStore != nil {
+		if saved := h.stateStore.GetAutoBroadcastSettings(); saved != nil {
+			settings.TargetEntityIDs = append([]string(nil), saved.TargetEntityIDs...)
+			settings.TTSEntityID = strings.TrimSpace(saved.TTSEntityID)
+			settings.Language = strings.TrimSpace(saved.Language)
+			settings.Voice = strings.TrimSpace(saved.Voice)
+		}
+	}
+
+	if settings.TTSEntityID == "" {
+		settings.TTSEntityID = options.DefaultTTSEntity
+	}
+	if strings.EqualFold(settings.TTSEntityID, "tts.google_ai_tts") || strings.EqualFold(settings.TTSEntityID, "tts.google_generative_ai_tts") {
+		if settings.Voice == "" {
+			settings.Voice = "achernar"
+		}
+		settings.Language = ""
+	}
+	if len(settings.TargetEntityIDs) == 0 {
+		settings.TargetEntityIDs = h.defaultAutomaticTargetEntityIDs(options)
+	}
+
+	return &settings, nil
+}
+
+func (h *HomeAssistant) SaveAutoBroadcastSettings(ctx context.Context, settings AutomaticBroadcastSettings) (*AutomaticBroadcastSettings, error) {
+	options, err := h.ListBroadcastOptions(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	normalized := AutomaticBroadcastSettings{
+		TargetEntityIDs: normalizeEntityIDs(settings.TargetEntityIDs, "media_player."),
+		TTSEntityID:     strings.TrimSpace(settings.TTSEntityID),
+		Language:        strings.TrimSpace(settings.Language),
+		Voice:           strings.TrimSpace(settings.Voice),
+	}
+	if normalized.TTSEntityID == "" {
+		normalized.TTSEntityID = options.DefaultTTSEntity
+	}
+	if !containsEntity(options.TTSEntities, normalized.TTSEntityID) {
+		return nil, fmt.Errorf("unsupported tts entity: %s", normalized.TTSEntityID)
+	}
+	if len(normalized.TargetEntityIDs) == 0 {
+		normalized.TargetEntityIDs = h.defaultAutomaticTargetEntityIDs(options)
+	}
+	if len(normalized.TargetEntityIDs) == 0 {
+		return nil, fmt.Errorf("at least one media_player target is required")
+	}
+	if !containsAllEntities(options.MediaPlayers, normalized.TargetEntityIDs) {
+		return nil, fmt.Errorf("one or more media_player targets are unavailable")
+	}
+	if !supportsExplicitLanguage(normalized.TTSEntityID) {
+		normalized.Language = ""
+	}
+	if resolveVoiceOption(normalized.TTSEntityID, normalized.Voice) == "" {
+		normalized.Voice = ""
+	} else {
+		normalized.Voice = resolveVoiceOption(normalized.TTSEntityID, normalized.Voice)
+	}
+
+	if h.stateStore != nil {
+		if err := h.stateStore.SaveAutoBroadcastSettings(state.AutoBroadcastSettings{
+			TargetEntityIDs: normalized.TargetEntityIDs,
+			TTSEntityID:     normalized.TTSEntityID,
+			Language:        normalized.Language,
+			Voice:           normalized.Voice,
+		}); err != nil {
+			return nil, fmt.Errorf("persist automatic broadcast settings: %w", err)
+		}
+	}
+
+	return &normalized, nil
 }
 
 func summarizeForSpeech(text string) string {
@@ -267,40 +363,21 @@ func (h *HomeAssistant) SendTestBroadcast(ctx context.Context, request Broadcast
 }
 
 func (h *HomeAssistant) sendDirectSpeech(ctx context.Context, text string) error {
-	targetEntityIDs, err := h.resolveAutomaticTargetEntityIDs(ctx)
+	settings, err := h.GetAutoBroadcastSettings(ctx)
 	if err != nil {
 		return err
 	}
-	if len(targetEntityIDs) == 0 {
+	if len(settings.TargetEntityIDs) == 0 {
 		return fmt.Errorf("no media_player targets available for automatic playback")
 	}
 
 	return h.SendTestBroadcast(ctx, BroadcastRequest{
 		Message:         text,
-		TargetEntityIDs: targetEntityIDs,
+		TargetEntityIDs: settings.TargetEntityIDs,
+		TTSEntityID:     settings.TTSEntityID,
+		Language:        settings.Language,
+		Voice:           settings.Voice,
 	})
-}
-
-func (h *HomeAssistant) resolveAutomaticTargetEntityIDs(ctx context.Context) ([]string, error) {
-	configured := parseMediaPlayerTargets(h.target)
-	if len(configured) > 0 {
-		return configured, nil
-	}
-
-	options, err := h.ListBroadcastOptions(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list automatic playback targets: %w", err)
-	}
-
-	targets := make([]string, 0, len(options.MediaPlayers))
-	for _, option := range options.MediaPlayers {
-		entityID := strings.TrimSpace(option.EntityID)
-		if entityID == "" {
-			continue
-		}
-		targets = append(targets, entityID)
-	}
-	return targets, nil
 }
 
 func (h *HomeAssistant) resolveBroadcastMediaURL(ctx context.Context, request BroadcastRequest, primaryTTSEntityID string) (string, string, error) {
@@ -521,14 +598,28 @@ func resolveVoiceOption(entityID, requestedVoice string) string {
 	}
 }
 
-func parseMediaPlayerTargets(raw string) []string {
-	parts := strings.Split(raw, ",")
-	targets := make([]string, 0, len(parts))
-	seen := make(map[string]struct{}, len(parts))
+func (h *HomeAssistant) defaultAutomaticTargetEntityIDs(options *BroadcastOptions) []string {
+	if configured := normalizeEntityIDs(strings.Split(h.target, ","), "media_player."); len(configured) > 0 {
+		return configured
+	}
 
-	for _, part := range parts {
-		entityID := strings.TrimSpace(part)
-		if !strings.HasPrefix(entityID, "media_player.") {
+	targets := make([]string, 0, len(options.MediaPlayers))
+	for _, option := range options.MediaPlayers {
+		entityID := strings.TrimSpace(option.EntityID)
+		if entityID == "" {
+			continue
+		}
+		targets = append(targets, entityID)
+	}
+	return targets
+}
+
+func normalizeEntityIDs(values []string, prefix string) []string {
+	targets := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		entityID := strings.TrimSpace(value)
+		if !strings.HasPrefix(entityID, prefix) {
 			continue
 		}
 		if _, ok := seen[entityID]; ok {
@@ -537,6 +628,23 @@ func parseMediaPlayerTargets(raw string) []string {
 		seen[entityID] = struct{}{}
 		targets = append(targets, entityID)
 	}
-
 	return targets
+}
+
+func containsEntity(options []BroadcastEntityOption, entityID string) bool {
+	for _, option := range options {
+		if option.EntityID == entityID {
+			return true
+		}
+	}
+	return false
+}
+
+func containsAllEntities(options []BroadcastEntityOption, entityIDs []string) bool {
+	for _, entityID := range entityIDs {
+		if !containsEntity(options, entityID) {
+			return false
+		}
+	}
+	return true
 }

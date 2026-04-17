@@ -56,6 +56,7 @@ func main() {
 	eupfinClient := eupfin.NewClient(cfg.EupfinBaseURL)
 	telegramNotifier := notifier.NewTelegram(cfg.TelegramBotToken, cfg.TelegramChatID)
 	haNotifier := notifier.NewHomeAssistant(cfg.HABaseURL, cfg.HAToken, cfg.HANotifyMode, cfg.HATTSTarget)
+	haNotifier.SetStateStore(localState)
 	alertNotifier := notifier.NewMultiSender(telegramNotifier, haNotifier)
 	service := reminder.NewService(cfg, eupfinClient, alertNotifier, telegramNotifier, localState, historyStore, collectorLog)
 
@@ -108,6 +109,7 @@ func startStatusServer(port string, service *reminder.Service, haControl *notifi
 	mux.Handle("/api/history/day.csv", reminder.NewHistoryDayCSVHandler(service))
 	mux.Handle("/api/broadcast/options", reminder.NewBroadcastOptionsHandler(haControl))
 	mux.Handle("/api/broadcast/test", reminder.NewBroadcastTestHandler(haControl))
+	mux.Handle("/api/broadcast/auto", reminder.NewAutoBroadcastSettingsHandler(haControl))
 
 	server := &http.Server{
 		Addr:    ":" + port,
