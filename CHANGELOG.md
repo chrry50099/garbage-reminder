@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.7
+
+- Make automatic HomePod alerts use the same direct TTS playback path as the test broadcast flow
+- Fall back to the legacy webhook or service call path only when no playable media targets are available
+
 ## 0.6.6
 
 - Make HomePod / Home Assistant speech alerts shorter and more natural while keeping Telegram alerts detailed

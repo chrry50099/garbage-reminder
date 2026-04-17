@@ -69,15 +69,19 @@ func TestHomeAssistantWebhookPostsExpectedPayload(t *testing.T) {
 	var body string
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/webhook/garbage_alert" {
-			t.Fatalf("unexpected webhook path: %s", r.URL.Path)
+		switch r.URL.Path {
+		case "/api/states":
+			_, _ = w.Write([]byte(`[]`))
+		case "/api/webhook/garbage_alert":
+			payload, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("read request body: %v", err)
+			}
+			body = string(payload)
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
-		payload, err := io.ReadAll(r.Body)
-		if err != nil {
-			t.Fatalf("read request body: %v", err)
-		}
-		body = string(payload)
-		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
 
@@ -95,10 +99,14 @@ func TestHomeAssistantWebhookPostsExpectedPayload(t *testing.T) {
 
 func TestHomeAssistantServiceCallUsesDomainServicePath(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/services/script/homepod_broadcast" {
+		switch r.URL.Path {
+		case "/api/states":
+			_, _ = w.Write([]byte(`[]`))
+		case "/api/services/script/homepod_broadcast":
+			w.WriteHeader(http.StatusOK)
+		default:
 			t.Fatalf("unexpected service path: %s", r.URL.Path)
 		}
-		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
 

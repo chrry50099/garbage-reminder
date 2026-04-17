@@ -77,35 +77,16 @@ func NewHomeAssistant(baseURL, token, mode, target string) *HomeAssistant {
 }
 
 func (h *HomeAssistant) SendMessage(ctx context.Context, text string) error {
-	body, err := json.Marshal(haMessagePayload{
-		Message: summarizeForSpeech(text),
-		Source:  "garbage-tracing",
-	})
-	if err != nil {
-		return fmt.Errorf("marshal home assistant payload: %w", err)
+	speechText := summarizeForSpeech(text)
+	if err := h.sendDirectSpeech(ctx, speechText); err == nil {
+		return nil
+	} else {
+		if fallbackErr := h.sendLegacyMessage(ctx, speechText); fallbackErr == nil {
+			return nil
+		} else {
+			return fmt.Errorf("direct home assistant playback failed: %v; fallback failed: %w", err, fallbackErr)
+		}
 	}
-
-	endpoint, err := h.endpoint()
-	if err != nil {
-		return err
-	}
-
-	resp, err := h.do(ctx, http.MethodPost, endpoint, body)
-	if err != nil {
-		return fmt.Errorf("send home assistant request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("read home assistant response: %w", err)
-	}
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("home assistant returned status %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
-	}
-
-	return nil
 }
 
 func summarizeForSpeech(text string) string {
@@ -285,6 +266,43 @@ func (h *HomeAssistant) SendTestBroadcast(ctx context.Context, request Broadcast
 	return nil
 }
 
+func (h *HomeAssistant) sendDirectSpeech(ctx context.Context, text string) error {
+	targetEntityIDs, err := h.resolveAutomaticTargetEntityIDs(ctx)
+	if err != nil {
+		return err
+	}
+	if len(targetEntityIDs) == 0 {
+		return fmt.Errorf("no media_player targets available for automatic playback")
+	}
+
+	return h.SendTestBroadcast(ctx, BroadcastRequest{
+		Message:         text,
+		TargetEntityIDs: targetEntityIDs,
+	})
+}
+
+func (h *HomeAssistant) resolveAutomaticTargetEntityIDs(ctx context.Context) ([]string, error) {
+	configured := parseMediaPlayerTargets(h.target)
+	if len(configured) > 0 {
+		return configured, nil
+	}
+
+	options, err := h.ListBroadcastOptions(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list automatic playback targets: %w", err)
+	}
+
+	targets := make([]string, 0, len(options.MediaPlayers))
+	for _, option := range options.MediaPlayers {
+		entityID := strings.TrimSpace(option.EntityID)
+		if entityID == "" {
+			continue
+		}
+		targets = append(targets, entityID)
+	}
+	return targets, nil
+}
+
 func (h *HomeAssistant) resolveBroadcastMediaURL(ctx context.Context, request BroadcastRequest, primaryTTSEntityID string) (string, string, error) {
 	candidates := []string{primaryTTSEntityID}
 	options, err := h.ListBroadcastOptions(ctx)
@@ -315,6 +333,38 @@ func (h *HomeAssistant) resolveBroadcastMediaURL(ctx context.Context, request Br
 		return "", "", fmt.Errorf("no usable TTS engine found")
 	}
 	return "", "", fmt.Errorf("no usable TTS engine found: %s", strings.Join(failures, "; "))
+}
+
+func (h *HomeAssistant) sendLegacyMessage(ctx context.Context, text string) error {
+	body, err := json.Marshal(haMessagePayload{
+		Message: text,
+		Source:  "garbage-tracing",
+	})
+	if err != nil {
+		return fmt.Errorf("marshal home assistant payload: %w", err)
+	}
+
+	endpoint, err := h.endpoint()
+	if err != nil {
+		return err
+	}
+
+	resp, err := h.do(ctx, http.MethodPost, endpoint, body)
+	if err != nil {
+		return fmt.Errorf("send home assistant request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("read home assistant response: %w", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("home assistant returned status %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
+
+	return nil
 }
 
 func (h *HomeAssistant) generateTTSMediaURL(ctx context.Context, ttsEntityID string, request BroadcastRequest) (string, error) {
@@ -469,4 +519,24 @@ func resolveVoiceOption(entityID, requestedVoice string) string {
 	default:
 		return ""
 	}
+}
+
+func parseMediaPlayerTargets(raw string) []string {
+	parts := strings.Split(raw, ",")
+	targets := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+
+	for _, part := range parts {
+		entityID := strings.TrimSpace(part)
+		if !strings.HasPrefix(entityID, "media_player.") {
+			continue
+		}
+		if _, ok := seen[entityID]; ok {
+			continue
+		}
+		seen[entityID] = struct{}{}
+		targets = append(targets, entityID)
+	}
+
+	return targets
 }

@@ -236,16 +236,62 @@ func TestSendTestBroadcastFallsBackWhenPrimaryTTSProxyFails(t *testing.T) {
 }
 
 func TestSendMessageSummarizesSpeechPayload(t *testing.T) {
-	var payload haMessagePayload
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			t.Fatalf("read body: %v", err)
+	var (
+		playRequests []map[string]interface{}
+		ttsPayload   ttsGetURLRequest
+		webhookHit   bool
+		server       *httptest.Server
+	)
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/states":
+			_ = json.NewEncoder(w).Encode([]map[string]interface{}{
+				{
+					"entity_id": "media_player.ke_ting",
+					"state":     "idle",
+					"attributes": map[string]interface{}{
+						"friendly_name": "客廳 HomePod mini",
+					},
+				},
+				{
+					"entity_id": "media_player.zhu_wo",
+					"state":     "idle",
+					"attributes": map[string]interface{}{
+						"friendly_name": "主臥 HomePod mini",
+					},
+				},
+				{
+					"entity_id": "tts.google_ai_tts",
+					"state":     "unknown",
+					"attributes": map[string]interface{}{
+						"friendly_name": "Google AI TTS",
+					},
+				},
+			})
+		case "/api/tts_get_url":
+			if err := json.NewDecoder(r.Body).Decode(&ttsPayload); err != nil {
+				t.Fatalf("decode tts_get_url payload: %v", err)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"url":  server.URL + "/api/tts_proxy/test.mp3",
+				"path": "/api/tts_proxy/test.mp3",
+			})
+		case "/api/tts_proxy/test.mp3":
+			w.Header().Set("Content-Type", "audio/mpeg")
+			_, _ = w.Write([]byte("ID3"))
+		case "/api/services/media_player/play_media":
+			var payload map[string]interface{}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode play_media payload: %v", err)
+			}
+			playRequests = append(playRequests, payload)
+			w.WriteHeader(http.StatusOK)
+		case "/api/webhook/garbage":
+			webhookHit = true
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
-		if err := json.Unmarshal(body, &payload); err != nil {
-			t.Fatalf("unmarshal payload: %v", err)
-		}
-		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
 
@@ -256,7 +302,59 @@ func TestSendMessageSummarizesSpeechPayload(t *testing.T) {
 	}
 
 	expected := "垃圾車快到了，約 3 分鐘後到 有謙家園，請準備倒垃圾。"
-	if payload.Message != expected {
-		t.Fatalf("unexpected speech payload: %q", payload.Message)
+	if ttsPayload.Message != expected {
+		t.Fatalf("unexpected speech payload: %q", ttsPayload.Message)
+	}
+	if len(playRequests) != 2 {
+		t.Fatalf("expected direct playback to both media players, got %d", len(playRequests))
+	}
+	if webhookHit {
+		t.Fatal("expected SendMessage to use direct playback instead of webhook fallback")
+	}
+}
+
+func TestSendMessageFallsBackToWebhookWhenNoMediaPlayerTargetsAvailable(t *testing.T) {
+	var (
+		payload    haMessagePayload
+		webhookHit bool
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/states":
+			_ = json.NewEncoder(w).Encode([]map[string]interface{}{
+				{
+					"entity_id": "tts.google_ai_tts",
+					"state":     "unknown",
+					"attributes": map[string]interface{}{
+						"friendly_name": "Google AI TTS",
+					},
+				},
+			})
+		case "/api/webhook/garbage_alert":
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("read body: %v", err)
+			}
+			if err := json.Unmarshal(body, &payload); err != nil {
+				t.Fatalf("unmarshal payload: %v", err)
+			}
+			webhookHit = true
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := NewHomeAssistant(server.URL, "token", "webhook", "garbage_alert")
+	if err := client.SendMessage(context.Background(), "hello"); err != nil {
+		t.Fatalf("SendMessage() error: %v", err)
+	}
+
+	if !webhookHit {
+		t.Fatal("expected webhook fallback to be used")
+	}
+	if payload.Message != "hello" {
+		t.Fatalf("unexpected fallback message: %q", payload.Message)
 	}
 }
