@@ -108,6 +108,16 @@ func (s *Service) writeDayExports(day *history.DayData) error {
 	day.JSONExportPath = jsonPath
 	day.CSVExportPath = csvPath
 
+	if day.SampleCount == 0 && !s.isServiceDateTargetDay(day.ServiceDate) {
+		if err := removeIfExists(jsonPath); err != nil {
+			return err
+		}
+		if err := removeIfExists(csvPath); err != nil {
+			return err
+		}
+		return nil
+	}
+
 	if err := os.MkdirAll(filepath.Dir(jsonPath), 0o755); err != nil {
 		return fmt.Errorf("create exports directory: %w", err)
 	}
@@ -128,6 +138,21 @@ func (s *Service) writeDayExports(day *history.DayData) error {
 		return fmt.Errorf("write day csv export: %w", err)
 	}
 
+	return nil
+}
+
+func (s *Service) isServiceDateTargetDay(serviceDate string) bool {
+	date, err := time.ParseInLocation("2006-01-02", serviceDate, utils.GetTaiwanTimezone())
+	if err != nil {
+		return false
+	}
+	return s.isTargetDay(date.Weekday())
+}
+
+func removeIfExists(path string) error {
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove stale empty export %s: %w", path, err)
+	}
 	return nil
 }
 

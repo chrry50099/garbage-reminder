@@ -108,6 +108,7 @@ func startStatusServer(port string, service *reminder.Service, haControl *notifi
 	mux.Handle("/api/history/day", reminder.NewHistoryDayHandler(service))
 	mux.Handle("/api/history/day.json", reminder.NewHistoryDayJSONHandler(service))
 	mux.Handle("/api/history/day.csv", reminder.NewHistoryDayCSVHandler(service))
+	mux.Handle("/api/eta/evaluation", reminder.NewETAEvaluationHandler(service))
 	mux.Handle("/api/broadcast/options", reminder.NewBroadcastOptionsHandler(haControl))
 	mux.Handle("/api/broadcast/test", reminder.NewBroadcastTestHandler(haControl))
 	mux.Handle("/api/broadcast/auto", reminder.NewAutoBroadcastSettingsHandler(haControl))

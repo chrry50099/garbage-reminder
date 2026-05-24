@@ -92,6 +92,7 @@ type StatusSnapshot struct {
 	TodayGPSSamples  int                 `json:"today_gps_sample_count"`
 	SharedDataPath   string              `json:"shared_data_path,omitempty"`
 	CheckInterval    string              `json:"check_interval,omitempty"`
+	TargetDays       []string            `json:"target_days,omitempty"`
 	Message          string              `json:"message,omitempty"`
 	LastCollectedAt  *time.Time          `json:"last_collected_at,omitempty"`
 }
@@ -130,6 +131,7 @@ func NewService(
 			CollectionWindow: fmt.Sprintf("%s-%s", cfg.CollectionStart, cfg.CollectionEnd),
 			SharedDataPath:   cfg.SharedDataDir,
 			CheckInterval:    cfg.CheckInterval.String(),
+			TargetDays:       formatWeekdays(cfg.TargetDays),
 			Message:          "service starting",
 		},
 	}
@@ -554,6 +556,9 @@ func (s *Service) dispatchNotifications(
 		if prediction.RemainingMinutes > offset {
 			continue
 		}
+		if offset >= 10 && prediction.Source != "historical_model" {
+			continue
+		}
 
 		deliveryKey := buildDeliveryKey(serviceDate, offset)
 		if s.store.HasDelivery(deliveryKey) {
@@ -678,7 +683,18 @@ func (s *Service) updateStatus(snapshot StatusSnapshot) {
 	if snapshot.CheckInterval == "" {
 		snapshot.CheckInterval = s.cfg.CheckInterval.String()
 	}
+	if len(snapshot.TargetDays) == 0 {
+		snapshot.TargetDays = formatWeekdays(s.cfg.TargetDays)
+	}
 	s.status = snapshot
+}
+
+func formatWeekdays(days []time.Weekday) []string {
+	names := make([]string, 0, len(days))
+	for _, day := range days {
+		names = append(names, day.String())
+	}
+	return names
 }
 
 func findTargetPointStatus(statuses []eupfin.RouteStatus, routeID, pointID int) *eupfin.RouteStatusPoint {

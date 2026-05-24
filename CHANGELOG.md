@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.0
+
+- Restrict the 10-minute alert threshold to historical ETA predictions only so API fallback no longer sends very early 10-minute alerts
+- Add an ETA evaluation API and dashboard section showing prediction source, lead time, actual arrival, and alert error
+- Surface the effective target days in `/status` and the dashboard to make Home Assistant option drift visible
+- Skip JSON / CSV export files for non-service days with no collected samples
+- Refresh the dashboard toward a denser operations view with clearer status, history, evaluation, and TTS sections
+
 ## 0.7.0
 
 - Add an optional direct Google Cloud Text-to-Speech provider while keeping the existing Home Assistant TTS engines available

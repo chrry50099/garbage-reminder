@@ -81,6 +81,7 @@ func TestCheckOnceUsesHistoricalPredictionAndSendsAlert(t *testing.T) {
 func TestCheckOnceFallsBackToAPIWhenHistoryUnavailable(t *testing.T) {
 	cfg := testConfig()
 	alerts := &fakeNotifier{}
+	store := newFakeStore()
 	service := NewService(cfg, &fakeEupfinClient{
 		district: baseDistrict(),
 		target:   baseTarget(),
@@ -97,7 +98,7 @@ func TestCheckOnceFallsBackToAPIWhenHistoryUnavailable(t *testing.T) {
 				},
 			},
 		},
-	}, alerts, &fakeNotifier{}, newFakeStore(), newFakeHistoryStore(), nil)
+	}, alerts, &fakeNotifier{}, store, newFakeHistoryStore(), nil)
 	service.now = func() time.Time {
 		return time.Date(2026, 4, 13, 20, 22, 0, 0, time.FixedZone("CST", 8*3600))
 	}
@@ -106,10 +107,10 @@ func TestCheckOnceFallsBackToAPIWhenHistoryUnavailable(t *testing.T) {
 		t.Fatalf("CheckOnce() returned error: %v", err)
 	}
 
-	if len(alerts.messages) != 2 {
-		t.Fatalf("expected both alert thresholds from API fallback, got %d", len(alerts.messages))
+	if len(alerts.messages) != 1 {
+		t.Fatalf("expected only the 3-minute alert from API fallback, got %d", len(alerts.messages))
 	}
-	if !strings.Contains(alerts.messages[0], "api_estimated_time") || !strings.Contains(alerts.messages[1], "api_estimated_time") {
+	if !strings.Contains(alerts.messages[0], "api_estimated_time") || store.HasDelivery("2026-04-13|10") {
 		t.Fatalf("expected api_estimated_time in alert messages, got %+v", alerts.messages)
 	}
 }
@@ -142,8 +143,8 @@ func TestCheckOnceFallsBackToAPIWhenRouteShapeUnavailable(t *testing.T) {
 		t.Fatalf("CheckOnce() returned error: %v", err)
 	}
 
-	if len(alerts.messages) != 2 {
-		t.Fatalf("expected API fallback alerts, got %d", len(alerts.messages))
+	if len(alerts.messages) != 1 {
+		t.Fatalf("expected only the 3-minute API fallback alert, got %d", len(alerts.messages))
 	}
 	if !strings.Contains(alerts.messages[0], "api_estimated_time") {
 		t.Fatalf("expected api_estimated_time alert, got %+v", alerts.messages)
