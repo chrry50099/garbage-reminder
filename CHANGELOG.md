@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.0
+
+- Redesign the Home Assistant dashboard into a top persistent live ETA header bar + 3 focused tabs (`📍 即時地圖與今日軌跡`, `🔊 HomePod Mini 測試播報＆一鍵部署`, `📊 歷史資料與 ETA 準確度`)
+- Add a 6-step visual progress timeline and live Leaflet map on the main tab showing 有謙家園, 80m arrival circle, 500m community loop boundary, and automatic preview of the most recent trajectory when outside collection hours
+- Merge test broadcast and formal notification settings into a single unified studio with voice tier filter buttons (`WaveNet`, `Neural2`, `Chirp 3: HD`), automatic hiding of unsupported parameters for `Chirp 3: HD`, preset test sentences, and one-click deployment
+- Distinguish pre-arrival route vs. 有謙家園 community loop with dual-color map polylines, per-sample distance calculation, and one-click community loop table filtering
+
 ## 0.9.1
 
 - Set `tts.google_cloud_tts_direct` as the default TTS engine and keep only `tts.google_en_com` as the backup engine (removing other TTS options from the UI)
