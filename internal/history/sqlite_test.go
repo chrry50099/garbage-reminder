@@ -194,3 +194,53 @@ func TestSQLiteStoreListsServiceDatesAndSamplesByDay(t *testing.T) {
 		t.Fatalf("unexpected samples: %+v", samples)
 	}
 }
+
+func TestSQLiteStorePostArrivalPreservesArrivalAtAndCountsInHistory(t *testing.T) {
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "history.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore() returned error: %v", err)
+	}
+	defer store.Close()
+
+	start := time.Date(2026, 4, 13, 20, 0, 0, 0, time.FixedZone("CST", 8*3600))
+	arrivedAt := start.Add(15 * time.Minute)
+	completedAt := start.Add(25 * time.Minute)
+	if _, err := store.EnsureRun("2026-04-13", time.Monday, 461, 27, 24.748448, 121.02032, start); err != nil {
+		t.Fatalf("EnsureRun() error: %v", err)
+	}
+	if err := store.InsertSample(Sample{
+		RunID:        "2026-04-13",
+		ServiceDate:  "2026-04-13",
+		Weekday:      time.Monday,
+		RouteID:      461,
+		PointID:      27,
+		TruckLat:     24.745,
+		TruckLng:     121.015,
+		GPSAvailable: true,
+		CollectedAt:  start,
+	}); err != nil {
+		t.Fatalf("InsertSample() error: %v", err)
+	}
+	if err := store.MarkRunArrived("2026-04-13", arrivedAt, "gps_radius"); err != nil {
+		t.Fatalf("MarkRunArrived() error: %v", err)
+	}
+
+	hist, runCount, err := store.ListHistoricalSamples(time.Monday, 461, 27, start.AddDate(0, 0, -7))
+	if err != nil {
+		t.Fatalf("ListHistoricalSamples() error: %v", err)
+	}
+	if runCount != 1 || len(hist) != 1 {
+		t.Fatalf("expected post_arrival run to count in history, got runs=%d samples=%d", runCount, len(hist))
+	}
+
+	if err := store.MarkRunCompleted("2026-04-13", completedAt, "departed"); err != nil {
+		t.Fatalf("MarkRunCompleted() error: %v", err)
+	}
+	run, err := store.GetRun("2026-04-13")
+	if err != nil {
+		t.Fatalf("GetRun() error: %v", err)
+	}
+	if run.Status != "completed" || run.ArrivalAt == nil || !run.ArrivalAt.Equal(arrivedAt) || run.ArrivalSource != "gps_radius" {
+		t.Fatalf("expected original arrival_at and arrival_source to be preserved, got %+v", run)
+	}
+}

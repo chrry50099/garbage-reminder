@@ -69,14 +69,33 @@ func NewSQLiteStore(path string) (*SQLiteStore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite database: %w", err)
 	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 
 	store := &SQLiteStore{db: db}
+	if err := store.configurePragmas(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	if err := store.ensureSchema(); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
 
 	return store, nil
+}
+
+func (s *SQLiteStore) configurePragmas() error {
+	for _, pragma := range []string{
+		`PRAGMA busy_timeout = 10000`,
+		`PRAGMA journal_mode = WAL`,
+		`PRAGMA synchronous = NORMAL`,
+	} {
+		if _, err := s.db.Exec(pragma); err != nil {
+			return fmt.Errorf("apply sqlite pragma %q: %w", pragma, err)
+		}
+	}
+	return nil
 }
 
 func (s *SQLiteStore) Close() error {
@@ -205,10 +224,26 @@ func (s *SQLiteStore) InsertSample(sample Sample) error {
 	return nil
 }
 
+func (s *SQLiteStore) MarkRunArrived(runID string, arrivalAt time.Time, arrivalSource string) error {
+	_, err := s.db.Exec(`
+		UPDATE runs
+		SET status = 'post_arrival',
+		    arrival_at = COALESCE(arrival_at, ?),
+		    arrival_source = CASE WHEN IFNULL(arrival_source, '') = '' THEN ? ELSE arrival_source END
+		WHERE run_id = ? AND status != 'completed'
+	`, arrivalAt.Format(time.RFC3339), arrivalSource, runID)
+	if err != nil {
+		return fmt.Errorf("mark run arrived: %w", err)
+	}
+	return nil
+}
+
 func (s *SQLiteStore) MarkRunCompleted(runID string, arrivalAt time.Time, arrivalSource string) error {
 	_, err := s.db.Exec(`
 		UPDATE runs
-		SET status = 'completed', arrival_at = ?, arrival_source = ?
+		SET status = 'completed',
+		    arrival_at = COALESCE(arrival_at, ?),
+		    arrival_source = CASE WHEN IFNULL(arrival_source, '') = '' THEN ? ELSE arrival_source END
 		WHERE run_id = ?
 	`, arrivalAt.Format(time.RFC3339), arrivalSource, runID)
 	if err != nil {
@@ -248,7 +283,7 @@ func (s *SQLiteStore) ListHistoricalSamples(weekday time.Weekday, routeID, point
 		  AND s.route_id = ?
 		  AND s.point_id = ?
 		  AND s.gps_available = 1
-		  AND r.status = 'completed'
+		  AND r.status IN ('completed', 'post_arrival')
 		  AND r.arrival_at IS NOT NULL
 		  AND r.service_date >= ?
 		ORDER BY r.service_date DESC, s.collected_at ASC
@@ -322,7 +357,7 @@ func (s *SQLiteStore) ListRecentRunSamples(runID string, limit int) ([]RecentSam
 	}
 
 	rows, err := s.db.Query(`
-		SELECT truck_lat, truck_lng, progress_meters, segment_index, lateral_offset_meters, collected_at
+		SELECT gps_available, truck_lat, truck_lng, progress_meters, segment_index, lateral_offset_meters, collected_at
 		FROM samples
 		WHERE run_id = ?
 		ORDER BY collected_at DESC
@@ -336,11 +371,13 @@ func (s *SQLiteStore) ListRecentRunSamples(runID string, limit int) ([]RecentSam
 	recent := make([]RecentSample, 0, limit)
 	for rows.Next() {
 		var sample RecentSample
+		var gpsAvailable int
 		var progress sql.NullFloat64
 		var segment sql.NullInt64
 		var lateral sql.NullFloat64
 		var collectedAt string
 		if err := rows.Scan(
+			&gpsAvailable,
 			&sample.TruckLat,
 			&sample.TruckLng,
 			&progress,
@@ -350,6 +387,7 @@ func (s *SQLiteStore) ListRecentRunSamples(runID string, limit int) ([]RecentSam
 		); err != nil {
 			return nil, fmt.Errorf("scan recent run sample: %w", err)
 		}
+		sample.GPSAvailable = gpsAvailable == 1
 
 		parsedCollectedAt, err := time.Parse(time.RFC3339, collectedAt)
 		if err != nil {

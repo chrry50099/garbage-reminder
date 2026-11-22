@@ -23,6 +23,12 @@ export COLLECTION_START="$(bashio::config 'collection_start')"
 export COLLECTION_END="$(bashio::config 'collection_end')"
 export HISTORY_WEEKS="$(bashio::config 'history_weeks')"
 export ARRIVAL_RADIUS_METERS="$(bashio::config 'arrival_radius_meters')"
+if bashio::config.has_value 'post_arrival_departure_meters'; then
+	export POST_ARRIVAL_DEPARTURE_METERS="$(bashio::config 'post_arrival_departure_meters')"
+fi
+if bashio::config.has_value 'post_arrival_max_duration'; then
+	export POST_ARRIVAL_MAX_DURATION="$(bashio::config 'post_arrival_max_duration')"
+fi
 export MATCH_RADIUS_METERS="$(bashio::config 'match_radius_meters')"
 export MIN_HISTORY_RUNS="$(bashio::config 'min_history_runs')"
 export PROGRESS_WINDOW_METERS="$(bashio::config 'progress_window_meters')"

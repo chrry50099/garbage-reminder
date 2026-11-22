@@ -18,7 +18,12 @@ import (
 	"telegram-garbage-reminder/internal/utils"
 )
 
-const deliveryStatusSent = "sent"
+const (
+	deliveryStatusSent          = "sent"
+	postArrivalDepartureSamples = 3
+	defaultPostArrivalDeparture = 500.0
+	defaultPostArrivalMax       = 30 * time.Minute
+)
 
 type eupfinClient interface {
 	GetDistrictByCustID(ctx context.Context, custID int) (*eupfin.DistrictConfig, error)
@@ -44,6 +49,7 @@ type historyStore interface {
 	EnsureRun(serviceDate string, weekday time.Weekday, routeID, pointID int, targetLat, targetLng float64, startedAt time.Time) (*history.Run, error)
 	GetRun(runID string) (*history.Run, error)
 	InsertSample(sample history.Sample) error
+	MarkRunArrived(runID string, arrivalAt time.Time, arrivalSource string) error
 	MarkRunCompleted(runID string, arrivalAt time.Time, arrivalSource string) error
 	PruneBefore(cutoff time.Time) error
 	ListHistoricalSamples(weekday time.Weekday, routeID, pointID int, since time.Time) ([]history.HistoricalSample, int, error)
@@ -67,6 +73,9 @@ type Service struct {
 
 	routeShapeMu sync.RWMutex
 	routeShape   *history.RouteShape
+
+	pruneMu        sync.Mutex
+	lastPrunedDate string
 }
 
 type StatusSnapshot struct {
@@ -212,10 +221,7 @@ func (s *Service) CheckOnce(ctx context.Context) error {
 	now := s.now().In(utils.GetTaiwanTimezone())
 	serviceDate := now.Format("2006-01-02")
 
-	if err := s.history.PruneBefore(now.AddDate(0, 0, -7*s.cfg.HistoryWeeks)); err != nil {
-		s.logCollectorError("prune_history", serviceDate, now, err)
-		return err
-	}
+	s.maybePruneHistory(serviceDate, now)
 
 	if !s.isTargetDay(now.Weekday()) {
 		s.updateStatus(s.updateStatusWithDayCounts(StatusSnapshot{
@@ -230,6 +236,7 @@ func (s *Service) CheckOnce(ctx context.Context) error {
 	}
 
 	if !s.isWithinCollectionWindow(now) {
+		s.finalizePostArrivalAfterWindow(serviceDate, now)
 		s.updateStatus(s.updateStatusWithDayCounts(StatusSnapshot{
 			UpdatedAt:        now,
 			Active:           false,
@@ -300,39 +307,67 @@ func (s *Service) CheckOnce(ctx context.Context) error {
 	}
 
 	runStatus := "collecting"
-	if live.completionSource != "" {
-		if err := s.history.MarkRunCompleted(serviceDate, now, live.completionSource); err != nil {
-			s.logCollectorError("mark_run_completed", serviceDate, now, err)
-			return fmt.Errorf("mark run completed: %w", err)
+	var arrivalAt *time.Time
+	var arrivalSource string
+	if run != nil {
+		if run.Status != "" {
+			runStatus = run.Status
 		}
-		runStatus = "completed"
+		arrivalAt = run.ArrivalAt
+		arrivalSource = run.ArrivalSource
 	}
 
-	historicalSamples, historicalRuns, err := s.history.ListHistoricalSamples(
-		now.Weekday(),
-		target.RouteID,
-		target.PointID,
-		now.AddDate(0, 0, -7*s.cfg.HistoryWeeks),
-	)
-	if err != nil {
-		s.logCollectorError("list_historical_samples", serviceDate, now, err)
-		return fmt.Errorf("load historical samples: %w", err)
+	if runStatus == "collecting" {
+		if detected := detectTargetArrival(live.observation, target, s.cfg.ArrivalRadiusMeters, live.completionSource); detected != "" {
+			if err := s.history.MarkRunArrived(serviceDate, now, detected); err != nil {
+				s.logCollectorError("mark_run_arrived", serviceDate, now, err)
+				return fmt.Errorf("mark run arrived: %w", err)
+			}
+			runStatus = "post_arrival"
+			arrivedAt := now
+			arrivalAt = &arrivedAt
+			arrivalSource = detected
+		}
 	}
 
-	prediction := history.PredictFromHistory(live.observation, historicalSamples, historicalRuns, history.PredictorConfig{
-		ProgressWindowMeters:     s.cfg.ProgressWindowMeters,
-		LateralOffsetLimitMeters: s.cfg.LateralOffsetLimitMeters,
-		MinHistoryRuns:           s.cfg.MinHistoryRuns,
-		TargetProgressMeters:     s.currentTargetProgress(),
-	})
-	if prediction == nil {
-		prediction = history.PredictFromFallback(live.observation)
+	if runStatus == "post_arrival" && arrivalAt != nil {
+		if s.shouldCompletePostArrival(serviceDate, now, *arrivalAt, target) {
+			if err := s.history.MarkRunCompleted(serviceDate, *arrivalAt, arrivalSource); err != nil {
+				s.logCollectorError("mark_run_completed", serviceDate, now, err)
+				return fmt.Errorf("mark run completed: %w", err)
+			}
+			runStatus = "completed"
+		}
 	}
 
-	if prediction != nil {
-		if err := s.dispatchNotifications(ctx, serviceDate, now, target, live, prediction); err != nil {
-			s.logCollectorError("dispatch_notifications", serviceDate, now, err)
-			return err
+	var prediction *history.Prediction
+	if runStatus == "collecting" {
+		historicalSamples, historicalRuns, err := s.history.ListHistoricalSamples(
+			now.Weekday(),
+			target.RouteID,
+			target.PointID,
+			now.AddDate(0, 0, -7*s.cfg.HistoryWeeks),
+		)
+		if err != nil {
+			s.logCollectorError("list_historical_samples", serviceDate, now, err)
+			return fmt.Errorf("load historical samples: %w", err)
+		}
+
+		prediction = history.PredictFromHistory(live.observation, historicalSamples, historicalRuns, history.PredictorConfig{
+			ProgressWindowMeters:     s.cfg.ProgressWindowMeters,
+			LateralOffsetLimitMeters: s.cfg.LateralOffsetLimitMeters,
+			MinHistoryRuns:           s.cfg.MinHistoryRuns,
+			TargetProgressMeters:     s.currentTargetProgress(),
+		})
+		if prediction == nil {
+			prediction = history.PredictFromFallback(live.observation)
+		}
+
+		if prediction != nil {
+			if err := s.dispatchNotifications(ctx, serviceDate, now, target, live, prediction); err != nil {
+				s.logCollectorError("dispatch_notifications", serviceDate, now, err)
+				return err
+			}
 		}
 	}
 
@@ -341,7 +376,7 @@ func (s *Service) CheckOnce(ctx context.Context) error {
 	lastCollectedAt := now
 	snapshot := StatusSnapshot{
 		UpdatedAt:        now,
-		Active:           true,
+		Active:           runStatus != "completed",
 		ServiceDate:      serviceDate,
 		Weekday:          now.Weekday().String(),
 		CollectionWindow: fmt.Sprintf("%s-%s", s.cfg.CollectionStart, s.cfg.CollectionEnd),
@@ -652,13 +687,100 @@ func (s *Service) isWithinCollectionWindow(now time.Time) bool {
 }
 
 func (s *Service) statusMessage(runStatus string, prediction *history.Prediction) string {
-	if prediction == nil {
-		if runStatus == "completed" {
-			return "run completed without prediction"
+	switch runStatus {
+	case "post_arrival":
+		return "arrived at target; recording community loop"
+	case "completed":
+		if prediction == nil {
+			return "run completed"
 		}
+	}
+	if prediction == nil {
 		return "collecting samples; waiting for prediction"
 	}
 	return fmt.Sprintf("prediction ready via %s", prediction.Source)
+}
+
+func (s *Service) maybePruneHistory(serviceDate string, now time.Time) {
+	s.pruneMu.Lock()
+	alreadyPruned := s.lastPrunedDate == serviceDate
+	s.pruneMu.Unlock()
+	if alreadyPruned {
+		return
+	}
+
+	if err := s.history.PruneBefore(now.AddDate(0, 0, -7*s.cfg.HistoryWeeks)); err != nil {
+		s.logCollectorError("prune_history", serviceDate, now, err)
+		log.Printf("Prune history failed (continuing collection): %v", err)
+		return
+	}
+
+	s.pruneMu.Lock()
+	s.lastPrunedDate = serviceDate
+	s.pruneMu.Unlock()
+}
+
+func (s *Service) finalizePostArrivalAfterWindow(serviceDate string, now time.Time) {
+	_, endMinutes, err := s.cfg.CollectionWindowMinutes()
+	if err != nil {
+		return
+	}
+	currentMinutes := now.Hour()*60 + now.Minute()
+	if currentMinutes <= endMinutes {
+		return
+	}
+	run, err := s.history.GetRun(serviceDate)
+	if err != nil || run == nil || run.Status != "post_arrival" || run.ArrivalAt == nil {
+		return
+	}
+	if err := s.history.MarkRunCompleted(serviceDate, *run.ArrivalAt, run.ArrivalSource); err != nil {
+		s.logCollectorError("finalize_post_arrival", serviceDate, now, err)
+		log.Printf("Finalize post-arrival run failed: %v", err)
+	}
+}
+
+func (s *Service) shouldCompletePostArrival(serviceDate string, now, arrivalAt time.Time, target *state.CachedTarget) bool {
+	if maxDuration := s.postArrivalMaxDuration(); maxDuration > 0 && now.Sub(arrivalAt) >= maxDuration {
+		return true
+	}
+	return s.hasDepartedTarget(serviceDate, arrivalAt, target)
+}
+
+func (s *Service) hasDepartedTarget(serviceDate string, arrivalAt time.Time, target *state.CachedTarget) bool {
+	if target == nil {
+		return false
+	}
+	recent, err := s.history.ListRecentRunSamples(serviceDate, postArrivalDepartureSamples)
+	if err != nil || len(recent) < postArrivalDepartureSamples {
+		return false
+	}
+	departureMeters := s.postArrivalDepartureMeters()
+	for _, sample := range recent {
+		if sample.CollectedAt.Before(arrivalAt) {
+			return false
+		}
+		if !sample.GPSAvailable || (sample.TruckLat == 0 && sample.TruckLng == 0) {
+			return false
+		}
+		if geo.CalculateDistance(sample.TruckLat, sample.TruckLng, target.GISY, target.GISX) < departureMeters {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Service) postArrivalDepartureMeters() float64 {
+	if s.cfg != nil && s.cfg.PostArrivalDepartureMeters > 0 {
+		return s.cfg.PostArrivalDepartureMeters
+	}
+	return defaultPostArrivalDeparture
+}
+
+func (s *Service) postArrivalMaxDuration() time.Duration {
+	if s.cfg != nil && s.cfg.PostArrivalMaxDuration > 0 {
+		return s.cfg.PostArrivalMaxDuration
+	}
+	return defaultPostArrivalMax
 }
 
 func (s *Service) notifiedOffsets(serviceDate string) []int {
@@ -770,6 +892,21 @@ func detectRouteCompletion(routeStatus *eupfin.RouteStatus) string {
 		}
 	}
 	return "point_waiting_time_finished"
+}
+
+func detectTargetArrival(observation history.Observation, target *state.CachedTarget, arrivalRadiusMeters float64, completionSource string) string {
+	if observation.GPSAvailable && target != nil {
+		if geo.CalculateDistance(observation.TruckLat, observation.TruckLng, target.GISY, target.GISX) <= arrivalRadiusMeters {
+			return "gps_radius"
+		}
+	}
+	if observation.APIWaitingTime != nil && *observation.APIWaitingTime == 0 {
+		return "api_waiting_time"
+	}
+	if completionSource != "" {
+		return completionSource
+	}
+	return ""
 }
 
 func detectArrival(observation history.Observation, target *state.CachedTarget, arrivalRadiusMeters float64) string {

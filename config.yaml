@@ -1,5 +1,5 @@
 name: "Garbage ETA Predictor"
-version: "0.8.0"
+version: "0.9.0"
 slug: "garbage_eta_predictor"
 description: >-
   Collects garbage truck GPS history, predicts arrival time for 有謙家園,
@@ -47,6 +47,8 @@ options:
   collection_end: "21:30"
   history_weeks: 8
   arrival_radius_meters: 80
+  post_arrival_departure_meters: 500
+  post_arrival_max_duration: "30m"
   match_radius_meters: 250
   min_history_runs: 3
   progress_window_meters: 150
@@ -73,6 +75,8 @@ schema:
   collection_end: str
   history_weeks: int
   arrival_radius_meters: int
+  post_arrival_departure_meters: int?
+  post_arrival_max_duration: str?
   match_radius_meters: int
   min_history_runs: int
   progress_window_meters: int

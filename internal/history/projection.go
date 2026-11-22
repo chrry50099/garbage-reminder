@@ -43,6 +43,7 @@ type ProjectionCandidate struct {
 }
 
 type RecentSample struct {
+	GPSAvailable        bool
 	TruckLat            float64
 	TruckLng            float64
 	ProgressMeters      *float64

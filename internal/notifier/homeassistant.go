@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"sort"
 	"strings"
@@ -95,7 +96,7 @@ func NewHomeAssistant(baseURL, token, mode, target string) *HomeAssistant {
 		mode:    strings.TrimSpace(mode),
 		target:  strings.TrimSpace(target),
 		httpClient: &http.Client{
-			Timeout: 15 * time.Second,
+			Timeout: 30 * time.Second,
 		},
 	}
 }
@@ -113,6 +114,7 @@ func (h *HomeAssistant) SendMessage(ctx context.Context, text string) error {
 	if err := h.sendDirectSpeech(ctx, speechText); err == nil {
 		return nil
 	} else {
+		log.Printf("Direct Home Assistant playback failed (%v); falling back to legacy %s/%s", err, h.mode, h.target)
 		if fallbackErr := h.sendLegacyMessage(ctx, speechText); fallbackErr == nil {
 			return nil
 		} else {
@@ -146,6 +148,7 @@ func (h *HomeAssistant) GetAutoBroadcastSettings(ctx context.Context) (*Automati
 	if settings.TTSEntityID == "" {
 		settings.TTSEntityID = options.DefaultTTSEntity
 	}
+	settings.Language = normalizeLanguageForEntity(settings.TTSEntityID, settings.Language)
 	if strings.EqualFold(settings.TTSEntityID, "tts.google_ai_tts") || strings.EqualFold(settings.TTSEntityID, "tts.google_generative_ai_tts") {
 		if settings.Voice == "" {
 			settings.Voice = "achernar"
@@ -176,7 +179,7 @@ func (h *HomeAssistant) SaveAutoBroadcastSettings(ctx context.Context, settings 
 	normalized := AutomaticBroadcastSettings{
 		TargetEntityIDs: normalizeEntityIDs(settings.TargetEntityIDs, "media_player."),
 		TTSEntityID:     strings.TrimSpace(settings.TTSEntityID),
-		Language:        normalizeLanguageCode(settings.Language),
+		Language:        strings.TrimSpace(settings.Language),
 		Voice:           strings.TrimSpace(settings.Voice),
 		InputMode:       normalizeInputMode(settings.InputMode),
 		SpeakingRate:    settings.SpeakingRate,
@@ -191,6 +194,7 @@ func (h *HomeAssistant) SaveAutoBroadcastSettings(ctx context.Context, settings 
 	if !containsEntity(options.TTSEntities, normalized.TTSEntityID) {
 		return nil, fmt.Errorf("unsupported tts entity: %s", normalized.TTSEntityID)
 	}
+	normalized.Language = normalizeLanguageForEntity(normalized.TTSEntityID, normalized.Language)
 	if len(normalized.TargetEntityIDs) == 0 {
 		normalized.TargetEntityIDs = h.defaultAutomaticTargetEntityIDs(options)
 	}
@@ -395,6 +399,7 @@ func (h *HomeAssistant) SendTestBroadcast(ctx context.Context, request Broadcast
 		return fmt.Errorf("no TTS entity available")
 	}
 
+	request.TTSEntityID = ttsEntityID
 	request = normalizeBroadcastRequest(request)
 	request.Message = applyStylePrompt(request.Message, request.StylePrompt, ttsEntityID)
 	if isGoogleCloudDirectEntity(ttsEntityID) {
@@ -406,40 +411,7 @@ func (h *HomeAssistant) SendTestBroadcast(ctx context.Context, request Broadcast
 		return err
 	}
 
-	for _, targetEntityID := range request.TargetEntityIDs {
-		targetEntityID = strings.TrimSpace(targetEntityID)
-		if targetEntityID == "" {
-			continue
-		}
-
-		payload := map[string]interface{}{
-			"entity_id":          targetEntityID,
-			"media_content_id":   mediaURL,
-			"media_content_type": "music",
-		}
-
-		body, err := json.Marshal(payload)
-		if err != nil {
-			return fmt.Errorf("marshal media player payload: %w", err)
-		}
-
-		endpoint := fmt.Sprintf("%s/api/services/media_player/play_media", h.baseURL)
-		resp, err := h.do(ctx, http.MethodPost, endpoint, body)
-		if err != nil {
-			return fmt.Errorf("send play_media request: %w", err)
-		}
-
-		respBody, readErr := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if readErr != nil {
-			return fmt.Errorf("read play_media response: %w", readErr)
-		}
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			return fmt.Errorf("play_media failed for %s using %s with status %d: %s", targetEntityID, usedTTSEntityID, resp.StatusCode, strings.TrimSpace(string(respBody)))
-		}
-	}
-
-	return nil
+	return h.playMediaOnTargets(ctx, request.TargetEntityIDs, mediaURL, usedTTSEntityID)
 }
 
 func (h *HomeAssistant) sendDirectSpeech(ctx context.Context, text string) error {
@@ -452,26 +424,29 @@ func (h *HomeAssistant) sendDirectSpeech(ctx context.Context, text string) error
 	}
 
 	return h.SendTestBroadcast(ctx, BroadcastRequest{
-		Message:         applyStylePrompt(text, settings.StylePrompt, settings.TTSEntityID),
-		TargetEntityIDs: settings.TargetEntityIDs,
-		TTSEntityID:     settings.TTSEntityID,
-		Language:        settings.Language,
-		Voice:           settings.Voice,
-		InputMode:       settings.InputMode,
-		SpeakingRate:    settings.SpeakingRate,
-		Pitch:           settings.Pitch,
-		VolumeGainDB:    settings.VolumeGainDB,
+		Message:          text,
+		TargetEntityIDs:  settings.TargetEntityIDs,
+		TTSEntityID:      settings.TTSEntityID,
+		Language:         settings.Language,
+		Voice:            settings.Voice,
+		InputMode:        settings.InputMode,
+		SpeakingRate:     settings.SpeakingRate,
+		Pitch:            settings.Pitch,
+		VolumeGainDB:     settings.VolumeGainDB,
 		EffectsProfileID: settings.EffectsProfileID,
-		StylePrompt:     settings.StylePrompt,
+		StylePrompt:      settings.StylePrompt,
 	})
 }
 
 func (h *HomeAssistant) resolveBroadcastMediaURL(ctx context.Context, request BroadcastRequest, primaryTTSEntityID string) (string, string, error) {
-	candidates := []string{primaryTTSEntityID}
+	candidates := make([]string, 0, 4)
+	if primaryTTSEntityID != "" && !isGoogleCloudDirectEntity(primaryTTSEntityID) {
+		candidates = append(candidates, primaryTTSEntityID)
+	}
 	options, err := h.ListBroadcastOptions(ctx)
 	if err == nil {
 		for _, option := range options.TTSEntities {
-			if option.EntityID == "" || option.EntityID == primaryTTSEntityID {
+			if option.EntityID == "" || option.EntityID == primaryTTSEntityID || isGoogleCloudDirectEntity(option.EntityID) {
 				continue
 			}
 			candidates = append(candidates, option.EntityID)
@@ -489,6 +464,9 @@ func (h *HomeAssistant) resolveBroadcastMediaURL(ctx context.Context, request Br
 			failures = append(failures, fmt.Sprintf("%s proxy: %v", ttsEntityID, err))
 			continue
 		}
+		if ttsEntityID != primaryTTSEntityID {
+			log.Printf("Primary TTS %s failed; fell back to %s (%s)", primaryTTSEntityID, ttsEntityID, strings.Join(failures, "; "))
+		}
 		return mediaURL, ttsEntityID, nil
 	}
 
@@ -503,43 +481,73 @@ func (h *HomeAssistant) sendGoogleCloudBroadcast(ctx context.Context, request Br
 		return fmt.Errorf("google cloud tts is not configured")
 	}
 
+	request.TTSEntityID = googleCloudDirectEntityID
 	request = normalizeBroadcastRequest(request)
-	request.Message = applyStylePrompt(request.Message, request.StylePrompt, request.TTSEntityID)
 	mediaSourceID, err := h.googleCloud.SynthesizeToMediaSource(ctx, request)
 	if err != nil {
 		return err
 	}
 
-	for _, targetEntityID := range request.TargetEntityIDs {
+	return h.playMediaOnTargets(ctx, request.TargetEntityIDs, mediaSourceID, "google cloud tts")
+}
+
+func (h *HomeAssistant) playMediaOnTargets(ctx context.Context, targetEntityIDs []string, mediaContentID, engineLabel string) error {
+	var (
+		succeeded int
+		failures  []string
+	)
+	for _, targetEntityID := range targetEntityIDs {
 		targetEntityID = strings.TrimSpace(targetEntityID)
 		if targetEntityID == "" {
 			continue
 		}
+
 		payload := map[string]interface{}{
 			"entity_id":          targetEntityID,
-			"media_content_id":   mediaSourceID,
+			"media_content_id":   mediaContentID,
 			"media_content_type": "music",
 		}
+
 		body, err := json.Marshal(payload)
 		if err != nil {
-			return fmt.Errorf("marshal media player payload: %w", err)
+			failures = append(failures, fmt.Sprintf("%s marshal: %v", targetEntityID, err))
+			continue
 		}
+
 		endpoint := fmt.Sprintf("%s/api/services/media_player/play_media", h.baseURL)
 		resp, err := h.do(ctx, http.MethodPost, endpoint, body)
 		if err != nil {
-			return fmt.Errorf("send play_media request: %w", err)
+			log.Printf("play_media request failed for %s using %s: %v", targetEntityID, engineLabel, err)
+			failures = append(failures, fmt.Sprintf("%s request: %v", targetEntityID, err))
+			continue
 		}
+
 		respBody, readErr := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		if readErr != nil {
-			return fmt.Errorf("read play_media response: %w", readErr)
+			log.Printf("play_media read response failed for %s using %s: %v", targetEntityID, engineLabel, readErr)
+			failures = append(failures, fmt.Sprintf("%s read: %v", targetEntityID, readErr))
+			continue
 		}
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			return fmt.Errorf("play_media failed for %s using google cloud tts with status %d: %s", targetEntityID, resp.StatusCode, strings.TrimSpace(string(respBody)))
+			log.Printf("play_media failed for %s using %s with status %d: %s", targetEntityID, engineLabel, resp.StatusCode, strings.TrimSpace(string(respBody)))
+			failures = append(failures, fmt.Sprintf("play_media failed for %s using %s with status %d: %s", targetEntityID, engineLabel, resp.StatusCode, strings.TrimSpace(string(respBody))))
+			continue
 		}
+
+		succeeded++
 	}
 
-	return nil
+	if succeeded > 0 {
+		if len(failures) > 0 {
+			log.Printf("Broadcast partially succeeded (%d played, %d failed): %s", succeeded, len(failures), strings.Join(failures, "; "))
+		}
+		return nil
+	}
+	if len(failures) == 0 {
+		return fmt.Errorf("at least one target_entity_id is required")
+	}
+	return fmt.Errorf("%s", strings.Join(failures, "; "))
 }
 
 func (h *HomeAssistant) sendLegacyMessage(ctx context.Context, text string) error {
@@ -580,7 +588,7 @@ func (h *HomeAssistant) generateTTSMediaURL(ctx context.Context, ttsEntityID str
 		Message:  strings.TrimSpace(request.Message),
 		Cache:    true,
 	}
-	if language := normalizeLanguageCode(request.Language); language != "" && supportsExplicitLanguage(ttsEntityID) {
+	if language := normalizeLanguageForEntity(ttsEntityID, request.Language); language != "" && supportsExplicitLanguage(ttsEntityID) {
 		payload.Language = language
 	}
 	if voice := resolveVoiceOption(ttsEntityID, request.Voice); voice != "" {
@@ -741,6 +749,33 @@ func normalizeLanguageCode(value string) string {
 	return language
 }
 
+func normalizeLanguageForEntity(entityID, value string) string {
+	if !supportsExplicitLanguage(entityID) {
+		return ""
+	}
+
+	normalized := normalizeLanguageCode(value)
+	if isGoogleCloudDirectEntity(entityID) {
+		switch normalized {
+		case "", "zh-tw", "zh-hant", "zh-hant-tw", "cmn-tw", "cmn-hant-tw":
+			return "cmn-TW"
+		case "zh-cn", "zh-hans", "zh-hans-cn", "cmn-cn", "cmn-hans-cn":
+			return "cmn-CN"
+		default:
+			return strings.ReplaceAll(strings.TrimSpace(value), "_", "-")
+		}
+	}
+
+	switch normalized {
+	case "cmn-tw", "cmn-hant-tw", "zh-hant-tw", "zh-hant":
+		return "zh-tw"
+	case "cmn-cn", "cmn-hans-cn", "zh-hans-cn", "zh-hans":
+		return "zh-cn"
+	default:
+		return normalized
+	}
+}
+
 func normalizeInputMode(value string) string {
 	mode := strings.ToLower(strings.TrimSpace(value))
 	switch mode {
@@ -824,7 +859,7 @@ func applyStylePrompt(message, stylePrompt, entityID string) string {
 }
 
 func normalizeBroadcastRequest(request BroadcastRequest) BroadcastRequest {
-	request.Language = normalizeLanguageCode(request.Language)
+	request.Language = normalizeLanguageForEntity(request.TTSEntityID, request.Language)
 	request.InputMode = normalizeInputMode(request.InputMode)
 	request.EffectsProfileID = strings.TrimSpace(request.EffectsProfileID)
 	request.StylePrompt = strings.TrimSpace(request.StylePrompt)

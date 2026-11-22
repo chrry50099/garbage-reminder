@@ -43,6 +43,8 @@ type Config struct {
 	HistoryWeeks    int
 
 	ArrivalRadiusMeters           float64
+	PostArrivalDepartureMeters    float64
+	PostArrivalMaxDuration        time.Duration
 	MatchRadiusMeters             float64
 	MinHistoryRuns                int
 	ProgressWindowMeters          float64
@@ -85,6 +87,16 @@ func Load() (*Config, error) {
 	}
 
 	arrivalRadiusMeters, err := parsePositiveFloatEnv("ARRIVAL_RADIUS_METERS", 80)
+	if err != nil {
+		return nil, err
+	}
+
+	postArrivalDepartureMeters, err := parsePositiveFloatEnv("POST_ARRIVAL_DEPARTURE_METERS", 500)
+	if err != nil {
+		return nil, err
+	}
+
+	postArrivalMaxDuration, err := parseDurationEnv("POST_ARRIVAL_MAX_DURATION", 30*time.Minute)
 	if err != nil {
 		return nil, err
 	}
@@ -134,6 +146,8 @@ func Load() (*Config, error) {
 		HistoryWeeks:    historyWeeks,
 
 		ArrivalRadiusMeters:           arrivalRadiusMeters,
+		PostArrivalDepartureMeters:    postArrivalDepartureMeters,
+		PostArrivalMaxDuration:        postArrivalMaxDuration,
 		MatchRadiusMeters:             matchRadiusMeters,
 		MinHistoryRuns:                minHistoryRuns,
 		ProgressWindowMeters:          progressWindowMeters,
@@ -262,6 +276,12 @@ func (c *Config) Validate() error {
 	}
 	if c.ArrivalRadiusMeters <= 0 {
 		return fmt.Errorf("ARRIVAL_RADIUS_METERS must be greater than 0")
+	}
+	if c.PostArrivalDepartureMeters <= 0 {
+		return fmt.Errorf("POST_ARRIVAL_DEPARTURE_METERS must be greater than 0")
+	}
+	if c.PostArrivalMaxDuration <= 0 {
+		return fmt.Errorf("POST_ARRIVAL_MAX_DURATION must be greater than 0")
 	}
 	if c.MatchRadiusMeters <= 0 {
 		return fmt.Errorf("MATCH_RADIUS_METERS must be greater than 0")

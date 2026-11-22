@@ -187,15 +187,18 @@ func TestCheckOnceDoesNotMarkRunCompletedWhenTargetIsNear(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetRun() returned error: %v", err)
 	}
-	if run == nil || run.Status != "collecting" {
-		t.Fatalf("expected run to stay collecting near target, got %+v", run)
+	if run == nil || run.Status != "post_arrival" || run.ArrivalAt == nil || run.ArrivalSource != "gps_radius" {
+		t.Fatalf("expected run to enter post_arrival near target without completing, got %+v", run)
 	}
 }
 
-func TestCheckOnceMarksRunCompletedWhenRouteFinishes(t *testing.T) {
+func TestCheckOnceContinuesRecordingLoopAndCompletesAfterDeparture(t *testing.T) {
 	cfg := testConfig()
+	cfg.PostArrivalDepartureMeters = 500
+	cfg.PostArrivalMaxDuration = 30 * time.Minute
 	historyStore := newFakeHistoryStore()
-	service := NewService(cfg, &fakeEupfinClient{
+	alerts := &fakeNotifier{}
+	client := &fakeEupfinClient{
 		district: baseDistrict(),
 		target:   baseTarget(),
 		routes:   []eupfin.Route{baseRoute()},
@@ -215,21 +218,111 @@ func TestCheckOnceMarksRunCompletedWhenRouteFinishes(t *testing.T) {
 				},
 			},
 		},
-	}, &fakeNotifier{}, &fakeNotifier{}, newFakeStore(), historyStore, nil)
-	service.now = func() time.Time {
-		return time.Date(2026, 4, 13, 21, 5, 0, 0, time.FixedZone("CST", 8*3600))
 	}
+	service := NewService(cfg, client, alerts, &fakeNotifier{}, newFakeStore(), historyStore, nil)
+	baseTime := time.Date(2026, 4, 13, 20, 15, 0, 0, time.FixedZone("CST", 8*3600))
+	service.now = func() time.Time { return baseTime }
+
+	// Tick 1: arrives at 有謙家園 and route reports -2 -> enters post_arrival, keeps recording
+	if err := service.CheckOnce(context.Background()); err != nil {
+		t.Fatalf("tick 1 CheckOnce() error: %v", err)
+	}
+	run, _ := historyStore.GetRun("2026-04-13")
+	if run == nil || run.Status != "post_arrival" || run.ArrivalAt == nil || !run.ArrivalAt.Equal(baseTime) {
+		t.Fatalf("expected post_arrival with arrival_at=%v, got %+v", baseTime, run)
+	}
+
+	// Tick 2: loops inside 有謙家園 (~200m away) -> still post_arrival, sample recorded
+	client.cars = []eupfin.CarStatus{{CarUnicode: "68715", LogGISX: 121.022000, LogGISY: 24.749200}}
+	service.now = func() time.Time { return baseTime.Add(20 * time.Second) }
+	if err := service.CheckOnce(context.Background()); err != nil {
+		t.Fatalf("tick 2 CheckOnce() error: %v", err)
+	}
+	run, _ = historyStore.GetRun("2026-04-13")
+	if run.Status != "post_arrival" || len(historyStore.samples) != 2 {
+		t.Fatalf("expected continued post_arrival recording inside community, status=%s samples=%d", run.Status, len(historyStore.samples))
+	}
+
+	// Ticks 3-5: departs >= 500m away for 3 consecutive samples -> completed, preserving original arrival_at
+	for i := 1; i <= 3; i++ {
+		client.cars = []eupfin.CarStatus{{CarUnicode: "68715", LogGISX: 121.013000, LogGISY: 24.752000}}
+		service.now = func() time.Time { return baseTime.Add(time.Duration(20+i*20) * time.Second) }
+		if err := service.CheckOnce(context.Background()); err != nil {
+			t.Fatalf("departure tick %d CheckOnce() error: %v", i, err)
+		}
+	}
+	run, _ = historyStore.GetRun("2026-04-13")
+	if run.Status != "completed" {
+		t.Fatalf("expected run to complete after 3 departed samples, got %s", run.Status)
+	}
+	if run.ArrivalAt == nil || !run.ArrivalAt.Equal(baseTime) {
+		t.Fatalf("expected original arrival_at %v to be preserved, got %v", baseTime, run.ArrivalAt)
+	}
+	if len(historyStore.samples) != 5 {
+		t.Fatalf("expected all 5 samples to be recorded, got %d", len(historyStore.samples))
+	}
+	if len(alerts.messages) != 0 {
+		t.Fatalf("expected no alerts after arrival, got %d", len(alerts.messages))
+	}
+}
+
+func TestCheckOnceCompletesPostArrivalAtMaxDuration(t *testing.T) {
+	cfg := testConfig()
+	cfg.PostArrivalDepartureMeters = 500
+	cfg.PostArrivalMaxDuration = 30 * time.Minute
+	historyStore := newFakeHistoryStore()
+	client := &fakeEupfinClient{
+		district: baseDistrict(),
+		target:   baseTarget(),
+		routes:   []eupfin.Route{baseRoute()},
+		cars:     []eupfin.CarStatus{{CarUnicode: "68715", LogGISX: 121.020320, LogGISY: 24.748448}},
+	}
+	service := NewService(cfg, client, &fakeNotifier{}, &fakeNotifier{}, newFakeStore(), historyStore, nil)
+	baseTime := time.Date(2026, 4, 13, 20, 15, 0, 0, time.FixedZone("CST", 8*3600))
+	service.now = func() time.Time { return baseTime }
 
 	if err := service.CheckOnce(context.Background()); err != nil {
-		t.Fatalf("CheckOnce() returned error: %v", err)
+		t.Fatalf("tick 1 error: %v", err)
+	}
+	service.now = func() time.Time { return baseTime.Add(30 * time.Minute) }
+	if err := service.CheckOnce(context.Background()); err != nil {
+		t.Fatalf("tick 2 error: %v", err)
+	}
+	run, _ := historyStore.GetRun("2026-04-13")
+	if run == nil || run.Status != "completed" || run.ArrivalAt == nil || !run.ArrivalAt.Equal(baseTime) {
+		t.Fatalf("expected completed run after max post-arrival duration with preserved arrival_at, got %+v", run)
+	}
+}
+
+func TestCheckOnceContinuesWhenPruneFailsAndPrunesOncePerDay(t *testing.T) {
+	cfg := testConfig()
+	historyStore := newFakeHistoryStore()
+	historyStore.pruneErr = errors.New("database is locked (SQLITE_BUSY)")
+	service := NewService(cfg, &fakeEupfinClient{
+		district: baseDistrict(),
+		target:   baseTarget(),
+		routes:   []eupfin.Route{baseRoute()},
+		cars:     []eupfin.CarStatus{{CarUnicode: "68715", LogGISX: 121.013500, LogGISY: 24.745500}},
+	}, &fakeNotifier{}, &fakeNotifier{}, newFakeStore(), historyStore, nil)
+	now := time.Date(2026, 4, 13, 20, 5, 0, 0, time.FixedZone("CST", 8*3600))
+	service.now = func() time.Time { return now }
+
+	if err := service.CheckOnce(context.Background()); err != nil {
+		t.Fatalf("expected CheckOnce to succeed even when PruneBefore fails, got: %v", err)
+	}
+	if len(historyStore.samples) != 1 {
+		t.Fatalf("expected sample to be collected despite prune error, got %d", len(historyStore.samples))
 	}
 
-	run, err := historyStore.GetRun("2026-04-13")
-	if err != nil {
-		t.Fatalf("GetRun() returned error: %v", err)
+	historyStore.pruneErr = nil
+	if err := service.CheckOnce(context.Background()); err != nil {
+		t.Fatalf("second CheckOnce error: %v", err)
 	}
-	if run == nil || run.Status != "completed" || run.ArrivalSource != "route_waiting_time_finished" {
-		t.Fatalf("expected run to be marked completed by route completion, got %+v", run)
+	if err := service.CheckOnce(context.Background()); err != nil {
+		t.Fatalf("third CheckOnce error: %v", err)
+	}
+	if historyStore.pruneCalls != 2 {
+		t.Fatalf("expected PruneBefore to stop retrying once succeeded for the day (2 calls total), got %d", historyStore.pruneCalls)
 	}
 }
 
@@ -384,6 +477,8 @@ type fakeHistoryStore struct {
 	historicalSamples []history.HistoricalSample
 	historicalRuns    int
 	recentSamples     []history.RecentSample
+	pruneErr          error
+	pruneCalls        int
 }
 
 func newFakeHistoryStore() *fakeHistoryStore {
@@ -422,25 +517,70 @@ func (f *fakeHistoryStore) InsertSample(sample history.Sample) error {
 	return nil
 }
 
+func (f *fakeHistoryStore) MarkRunArrived(runID string, arrivalAt time.Time, arrivalSource string) error {
+	run := f.runs[runID]
+	if run == nil || run.Status == "completed" {
+		return nil
+	}
+	run.Status = "post_arrival"
+	if run.ArrivalAt == nil {
+		t := arrivalAt
+		run.ArrivalAt = &t
+	}
+	if run.ArrivalSource == "" {
+		run.ArrivalSource = arrivalSource
+	}
+	return nil
+}
+
 func (f *fakeHistoryStore) MarkRunCompleted(runID string, arrivalAt time.Time, arrivalSource string) error {
 	run := f.runs[runID]
 	if run == nil {
 		return nil
 	}
 	run.Status = "completed"
-	run.ArrivalAt = &arrivalAt
-	run.ArrivalSource = arrivalSource
+	if run.ArrivalAt == nil {
+		t := arrivalAt
+		run.ArrivalAt = &t
+	}
+	if run.ArrivalSource == "" {
+		run.ArrivalSource = arrivalSource
+	}
 	return nil
 }
 
-func (f *fakeHistoryStore) PruneBefore(time.Time) error { return nil }
+func (f *fakeHistoryStore) PruneBefore(time.Time) error {
+	f.pruneCalls++
+	return f.pruneErr
+}
 
 func (f *fakeHistoryStore) ListHistoricalSamples(time.Weekday, int, int, time.Time) ([]history.HistoricalSample, int, error) {
 	return f.historicalSamples, f.historicalRuns, nil
 }
 
-func (f *fakeHistoryStore) ListRecentRunSamples(string, int) ([]history.RecentSample, error) {
-	return append([]history.RecentSample(nil), f.recentSamples...), nil
+func (f *fakeHistoryStore) ListRecentRunSamples(runID string, limit int) ([]history.RecentSample, error) {
+	if len(f.recentSamples) > 0 {
+		return append([]history.RecentSample(nil), f.recentSamples...), nil
+	}
+	matched := make([]history.RecentSample, 0)
+	for _, sample := range f.samples {
+		if sample.RunID != runID {
+			continue
+		}
+		matched = append(matched, history.RecentSample{
+			GPSAvailable:        sample.GPSAvailable,
+			TruckLat:            sample.TruckLat,
+			TruckLng:            sample.TruckLng,
+			ProgressMeters:      sample.ProgressMeters,
+			SegmentIndex:        sample.SegmentIndex,
+			LateralOffsetMeters: sample.LateralOffsetMeters,
+			CollectedAt:         sample.CollectedAt,
+		})
+	}
+	if limit > 0 && len(matched) > limit {
+		matched = matched[len(matched)-limit:]
+	}
+	return matched, nil
 }
 
 func (f *fakeHistoryStore) ListServiceDates(limit int) ([]string, error) {

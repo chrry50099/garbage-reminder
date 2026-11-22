@@ -407,3 +407,103 @@ func TestSendMessageFallsBackToWebhookWhenNoMediaPlayerTargetsAvailable(t *testi
 		t.Fatalf("unexpected fallback message: %q", payload.Message)
 	}
 }
+
+func TestSendTestBroadcastNormalizesCMNTWToZHTWForGoogleTranslate(t *testing.T) {
+	var payload ttsGetURLRequest
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/states":
+			_ = json.NewEncoder(w).Encode([]map[string]interface{}{
+				{
+					"entity_id":  "tts.google_en_com",
+					"state":      "unknown",
+					"attributes": map[string]interface{}{"friendly_name": "Google Translate"},
+				},
+			})
+		case "/api/tts_get_url":
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode request: %v", err)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"url":  server.URL + "/api/tts_proxy/test.mp3",
+				"path": "/api/tts_proxy/test.mp3",
+			})
+		case "/api/tts_proxy/test.mp3":
+			w.Header().Set("Content-Type", "audio/mpeg")
+			_, _ = w.Write([]byte("ID3"))
+		case "/api/services/media_player/play_media":
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := NewHomeAssistant(server.URL, "token", "webhook", "garbage")
+	err := client.SendTestBroadcast(context.Background(), BroadcastRequest{
+		Message:         "垃圾車快到了",
+		TTSEntityID:     "tts.google_en_com",
+		TargetEntityIDs: []string{"media_player.ke_ting"},
+		Language:        "cmn-tw",
+	})
+	if err != nil {
+		t.Fatalf("SendTestBroadcast() error: %v", err)
+	}
+	if payload.Language != "zh-tw" {
+		t.Fatalf("expected cmn-tw to be normalized to zh-tw for tts.google_en_com, got %q", payload.Language)
+	}
+}
+
+func TestSendTestBroadcastContinuesToSecondSpeakerWhenFirstFails(t *testing.T) {
+	var attempted []string
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/states":
+			_ = json.NewEncoder(w).Encode([]map[string]interface{}{
+				{
+					"entity_id":  "tts.google_en_com",
+					"state":      "unknown",
+					"attributes": map[string]interface{}{"friendly_name": "Google Translate"},
+				},
+			})
+		case "/api/tts_get_url":
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"url":  server.URL + "/api/tts_proxy/test.mp3",
+				"path": "/api/tts_proxy/test.mp3",
+			})
+		case "/api/tts_proxy/test.mp3":
+			w.Header().Set("Content-Type", "audio/mpeg")
+			_, _ = w.Write([]byte("ID3"))
+		case "/api/services/media_player/play_media":
+			var payload map[string]interface{}
+			_ = json.NewDecoder(r.Body).Decode(&payload)
+			entityID := payload["entity_id"].(string)
+			attempted = append(attempted, entityID)
+			if entityID == "media_player.zhu_wo" {
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = w.Write([]byte("speaker unavailable"))
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := NewHomeAssistant(server.URL, "token", "webhook", "garbage")
+	err := client.SendTestBroadcast(context.Background(), BroadcastRequest{
+		Message:         "垃圾車快到了",
+		TTSEntityID:     "tts.google_en_com",
+		TargetEntityIDs: []string{"media_player.zhu_wo", "media_player.ke_ting"},
+		Language:        "zh-tw",
+	})
+	if err != nil {
+		t.Fatalf("expected partial broadcast success to return nil, got: %v", err)
+	}
+	if len(attempted) != 2 || attempted[0] != "media_player.zhu_wo" || attempted[1] != "media_player.ke_ting" {
+		t.Fatalf("expected both speakers to be attempted, got: %+v", attempted)
+	}
+}

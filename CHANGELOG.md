@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.0
+
+- Fix HomePod automatic broadcast reliability: normalize incompatible `cmn-tw` language codes to `zh-tw` for Google Translate TTS, log direct playback errors before webhook fallback, isolate per-speaker failures so one offline HomePod does not block others, skip non-HA `tts.google_cloud_tts_direct` in `/api/tts_get_url` fallback, and prevent double Gemini style prompt wrapping
+- Fix SQLite `SQLITE_BUSY` collection outage: configure `SetMaxOpenConns(1)`, `PRAGMA busy_timeout=10000`, and `WAL` mode, run history pruning at most once per service date, and never let a prune error abort live GPS collection or alerts
+- Continue recording the garbage truck route after arrival at 有謙家園 (`post_arrival` status) so the full community loop is captured until the truck departs (>= 500m for 3 consecutive samples), hits the 30-minute post-arrival cap, or exits the collection window, while preserving the first arrival timestamp for ETA prediction and evaluation
+
 ## 0.8.0
 
 - Restrict the 10-minute alert threshold to historical ETA predictions only so API fallback no longer sends very early 10-minute alerts
