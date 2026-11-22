@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.1
+
+- Set `tts.google_cloud_tts_direct` as the default TTS engine and keep only `tts.google_en_com` as the backup engine (removing other TTS options from the UI)
+- Populate Google Cloud TTS voice choices across the three voice tiers (`WaveNet`, `Neural2`, and `Chirp 3: HD`) with automatic parameter/locale handling for Chirp 3: HD and automatic fallback to `tts.google_en_com` (`zh-tw`) during formal alerts if Cloud TTS fails
+
 ## 0.9.0
 
 - Fix HomePod automatic broadcast reliability: normalize incompatible `cmn-tw` language codes to `zh-tw` for Google Translate TTS, log direct playback errors before webhook fallback, isolate per-speaker failures so one offline HomePod does not block others, skip non-HA `tts.google_cloud_tts_direct` in `/api/tts_get_url` fallback, and prevent double Gemini style prompt wrapping

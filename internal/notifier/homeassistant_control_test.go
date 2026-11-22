@@ -50,8 +50,14 @@ func TestListBroadcastOptionsFiltersHomePodsAndTTS(t *testing.T) {
 	if len(options.MediaPlayers) != 1 || options.MediaPlayers[0].EntityID != "media_player.ke_ting" {
 		t.Fatalf("unexpected media players: %+v", options.MediaPlayers)
 	}
-	if len(options.TTSEntities) != 1 || options.DefaultTTSEntity != "tts.google_en_com" {
+	if len(options.TTSEntities) != 2 || options.DefaultTTSEntity != "tts.google_cloud_tts_direct" {
 		t.Fatalf("unexpected tts entities: %+v", options)
+	}
+	if options.TTSEntities[0].EntityID != "tts.google_cloud_tts_direct" || options.TTSEntities[1].EntityID != "tts.google_en_com" {
+		t.Fatalf("expected only google_cloud_tts_direct and google_en_com, got: %+v", options.TTSEntities)
+	}
+	if len(options.GoogleCloudVoices) < 3 {
+		t.Fatalf("expected default google cloud voice tiers to be populated, got: %+v", options.GoogleCloudVoices)
 	}
 }
 
@@ -120,10 +126,10 @@ func TestSendTestBroadcastOmitsLanguageForGeminiTTS(t *testing.T) {
 		case "/api/states":
 			_ = json.NewEncoder(w).Encode([]map[string]interface{}{
 				{
-					"entity_id": "tts.google_ai_tts",
+					"entity_id": "tts.google_en_com",
 					"state":     "unknown",
 					"attributes": map[string]interface{}{
-						"friendly_name": "Google AI TTS",
+						"friendly_name": "Google Translate",
 					},
 				},
 			})
@@ -310,10 +316,10 @@ func TestSendMessageSummarizesSpeechPayload(t *testing.T) {
 					},
 				},
 				{
-					"entity_id": "tts.google_ai_tts",
+					"entity_id": "tts.google_en_com",
 					"state":     "unknown",
 					"attributes": map[string]interface{}{
-						"friendly_name": "Google AI TTS",
+						"friendly_name": "Google Translate",
 					},
 				},
 			})
@@ -372,10 +378,10 @@ func TestSendMessageFallsBackToWebhookWhenNoMediaPlayerTargetsAvailable(t *testi
 		case "/api/states":
 			_ = json.NewEncoder(w).Encode([]map[string]interface{}{
 				{
-					"entity_id": "tts.google_ai_tts",
+					"entity_id": "tts.google_en_com",
 					"state":     "unknown",
 					"attributes": map[string]interface{}{
-						"friendly_name": "Google AI TTS",
+						"friendly_name": "Google Translate",
 					},
 				},
 			})

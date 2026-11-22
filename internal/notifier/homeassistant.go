@@ -145,23 +145,25 @@ func (h *HomeAssistant) GetAutoBroadcastSettings(ctx context.Context) (*Automati
 		}
 	}
 
-	if settings.TTSEntityID == "" {
+	if settings.TTSEntityID == "" || !containsEntity(options.TTSEntities, settings.TTSEntityID) {
 		settings.TTSEntityID = options.DefaultTTSEntity
 	}
 	settings.Language = normalizeLanguageForEntity(settings.TTSEntityID, settings.Language)
-	if strings.EqualFold(settings.TTSEntityID, "tts.google_ai_tts") || strings.EqualFold(settings.TTSEntityID, "tts.google_generative_ai_tts") {
-		if settings.Voice == "" {
-			settings.Voice = "achernar"
-		}
-		settings.Language = ""
-	}
 	if isGoogleCloudDirectEntity(settings.TTSEntityID) {
 		if settings.Language == "" {
 			settings.Language = "cmn-TW"
 		}
+		if settings.Voice == "" {
+			settings.Voice = "cmn-TW-Wavenet-A"
+		}
 		if settings.InputMode == "" {
 			settings.InputMode = "text"
 		}
+	} else if strings.EqualFold(settings.TTSEntityID, googleTranslateBackupEntityID) {
+		if settings.Language == "" {
+			settings.Language = "zh-tw"
+		}
+		settings.Voice = ""
 	}
 	if len(settings.TargetEntityIDs) == 0 {
 		settings.TargetEntityIDs = h.defaultAutomaticTargetEntityIDs(options)
@@ -326,7 +328,7 @@ func (h *HomeAssistant) ListBroadcastOptions(ctx context.Context) (*BroadcastOpt
 		return nil, fmt.Errorf("decode home assistant states: %w", err)
 	}
 
-	ttsEntities := make([]BroadcastEntityOption, 0)
+	var backupTranslate *BroadcastEntityOption
 	allPlayers := make([]BroadcastEntityOption, 0)
 	homePodCandidates := make([]BroadcastEntityOption, 0)
 	for _, state := range states {
@@ -336,9 +338,10 @@ func (h *HomeAssistant) ListBroadcastOptions(ctx context.Context) (*BroadcastOpt
 			State:        strings.TrimSpace(state.State),
 		}
 
-	switch {
-		case strings.HasPrefix(state.EntityID, "tts."):
-			ttsEntities = append(ttsEntities, option)
+		switch {
+		case strings.EqualFold(state.EntityID, googleTranslateBackupEntityID):
+			optCopy := option
+			backupTranslate = &optCopy
 		case strings.HasPrefix(state.EntityID, "media_player."):
 			allPlayers = append(allPlayers, option)
 			if looksLikeHomePod(option) {
@@ -347,7 +350,6 @@ func (h *HomeAssistant) ListBroadcastOptions(ctx context.Context) (*BroadcastOpt
 		}
 	}
 
-	sortOptions(ttsEntities)
 	sortOptions(allPlayers)
 	sortOptions(homePodCandidates)
 
@@ -356,21 +358,34 @@ func (h *HomeAssistant) ListBroadcastOptions(ctx context.Context) (*BroadcastOpt
 		players = allPlayers
 	}
 
-	voices := make([]GoogleCloudVoiceOption, 0)
+	cloudState := "needs_api_key"
+	voices := DefaultGoogleCloudVoices()
 	if h.googleCloud != nil && h.googleCloud.Enabled() {
-		ttsEntities = append(ttsEntities, BroadcastEntityOption{
+		cloudState = "ready"
+		voices = h.googleCloud.ListRecommendedVoices(ctx)
+	}
+
+	ttsEntities := []BroadcastEntityOption{
+		{
 			EntityID:     googleCloudDirectEntityID,
-			FriendlyName: "Google Cloud TTS (Direct API)",
-			State:        "ready",
+			FriendlyName: "Google Cloud TTS (預設)",
+			State:        cloudState,
+		},
+	}
+	if backupTranslate != nil {
+		ttsEntities = append(ttsEntities, *backupTranslate)
+	} else {
+		ttsEntities = append(ttsEntities, BroadcastEntityOption{
+			EntityID:     googleTranslateBackupEntityID,
+			FriendlyName: "Google Translate (備援)",
+			State:        "available",
 		})
-		voices, _ = h.googleCloud.ListVoices(ctx, "cmn-TW")
-		sortOptions(ttsEntities)
 	}
 
 	return &BroadcastOptions{
-		MediaPlayers:     players,
-		TTSEntities:      ttsEntities,
-		DefaultTTSEntity: preferredTTSEntity(ttsEntities),
+		MediaPlayers:      players,
+		TTSEntities:       ttsEntities,
+		DefaultTTSEntity:  preferredTTSEntity(ttsEntities),
 		GoogleCloudVoices: voices,
 	}, nil
 }
@@ -423,7 +438,7 @@ func (h *HomeAssistant) sendDirectSpeech(ctx context.Context, text string) error
 		return fmt.Errorf("no media_player targets available for automatic playback")
 	}
 
-	return h.SendTestBroadcast(ctx, BroadcastRequest{
+	err = h.SendTestBroadcast(ctx, BroadcastRequest{
 		Message:          text,
 		TargetEntityIDs:  settings.TargetEntityIDs,
 		TTSEntityID:      settings.TTSEntityID,
@@ -436,6 +451,25 @@ func (h *HomeAssistant) sendDirectSpeech(ctx context.Context, text string) error
 		EffectsProfileID: settings.EffectsProfileID,
 		StylePrompt:      settings.StylePrompt,
 	})
+	if err == nil {
+		return nil
+	}
+
+	if isGoogleCloudDirectEntity(settings.TTSEntityID) {
+		log.Printf("Google Cloud TTS automatic broadcast failed (%v); falling back to %s (zh-tw)", err, googleTranslateBackupEntityID)
+		if fallbackErr := h.SendTestBroadcast(ctx, BroadcastRequest{
+			Message:         text,
+			TargetEntityIDs: settings.TargetEntityIDs,
+			TTSEntityID:     googleTranslateBackupEntityID,
+			Language:        "zh-tw",
+		}); fallbackErr == nil {
+			return nil
+		} else {
+			return fmt.Errorf("google cloud tts failed (%v); backup %s failed: %w", err, googleTranslateBackupEntityID, fallbackErr)
+		}
+	}
+
+	return err
 }
 
 func (h *HomeAssistant) resolveBroadcastMediaURL(ctx context.Context, request BroadcastRequest, primaryTTSEntityID string) (string, string, error) {
@@ -695,8 +729,10 @@ func looksLikeHomePod(option BroadcastEntityOption) bool {
 	return false
 }
 
+const googleTranslateBackupEntityID = "tts.google_en_com"
+
 func preferredTTSEntity(options []BroadcastEntityOption) string {
-	preferred := []string{"tts.google_ai_tts", "tts.google_generative_ai_tts", "tts.google_en_com"}
+	preferred := []string{googleCloudDirectEntityID, googleTranslateBackupEntityID}
 	for _, entityID := range preferred {
 		for _, option := range options {
 			if option.EntityID == entityID {

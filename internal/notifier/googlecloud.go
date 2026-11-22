@@ -29,10 +29,11 @@ type GoogleCloudTTS struct {
 }
 
 type GoogleCloudVoiceOption struct {
-	Name                  string   `json:"name"`
-	LanguageCodes         []string `json:"language_codes,omitempty"`
-	SSMLGender            string   `json:"ssml_gender,omitempty"`
-	NaturalSampleRateHertz int     `json:"natural_sample_rate_hertz,omitempty"`
+	Name                   string   `json:"name"`
+	Tier                   string   `json:"tier,omitempty"`
+	LanguageCodes          []string `json:"language_codes,omitempty"`
+	SSMLGender             string   `json:"ssml_gender,omitempty"`
+	NaturalSampleRateHertz int      `json:"natural_sample_rate_hertz,omitempty"`
 }
 
 type googleCloudVoicesResponse struct {
@@ -131,14 +132,129 @@ func (g *GoogleCloudTTS) ListVoices(ctx context.Context, languageCode string) ([
 	voices := make([]GoogleCloudVoiceOption, 0, len(payload.Voices))
 	for _, voice := range payload.Voices {
 		voices = append(voices, GoogleCloudVoiceOption{
-			Name:                  voice.Name,
-			LanguageCodes:         voice.LanguageCodes,
-			SSMLGender:            voice.SSMLGender,
+			Name:                   voice.Name,
+			Tier:                   GoogleCloudVoiceTier(voice.Name),
+			LanguageCodes:          voice.LanguageCodes,
+			SSMLGender:             voice.SSMLGender,
 			NaturalSampleRateHertz: voice.NaturalSampleRateHertz,
 		})
 	}
 	sortGoogleCloudVoices(voices)
 	return voices, nil
+}
+
+func (g *GoogleCloudTTS) ListRecommendedVoices(ctx context.Context) []GoogleCloudVoiceOption {
+	defaults := DefaultGoogleCloudVoices()
+	if !g.Enabled() {
+		return defaults
+	}
+
+	twVoices, err := g.ListVoices(ctx, "cmn-TW")
+	if err != nil {
+		return defaults
+	}
+
+	selected := filterPreferredGoogleCloudVoices(twVoices)
+	if !hasVoiceTier(selected, "Chirp 3: HD") {
+		if cnVoices, cnErr := g.ListVoices(ctx, "cmn-CN"); cnErr == nil {
+			for _, voice := range cnVoices {
+				if voice.Tier == "Chirp 3: HD" {
+					selected = append(selected, voice)
+				}
+			}
+		}
+	}
+
+	seen := make(map[string]struct{}, len(selected))
+	for _, v := range selected {
+		seen[strings.ToLower(v.Name)] = struct{}{}
+	}
+	for _, def := range defaults {
+		if !hasVoiceTier(selected, def.Tier) {
+			if _, ok := seen[strings.ToLower(def.Name)]; !ok {
+				selected = append(selected, def)
+				seen[strings.ToLower(def.Name)] = struct{}{}
+			}
+		}
+	}
+
+	if len(selected) == 0 {
+		return defaults
+	}
+
+	sortGoogleCloudVoices(selected)
+	return selected
+}
+
+func DefaultGoogleCloudVoices() []GoogleCloudVoiceOption {
+	return []GoogleCloudVoiceOption{
+		{
+			Name:          "cmn-TW-Wavenet-A",
+			Tier:          "WaveNet",
+			LanguageCodes: []string{"cmn-TW"},
+			SSMLGender:    "FEMALE",
+		},
+		{
+			Name:          "cmn-TW-Wavenet-B",
+			Tier:          "WaveNet",
+			LanguageCodes: []string{"cmn-TW"},
+			SSMLGender:    "MALE",
+		},
+		{
+			Name:          "cmn-TW-Wavenet-C",
+			Tier:          "WaveNet",
+			LanguageCodes: []string{"cmn-TW"},
+			SSMLGender:    "MALE",
+		},
+		{
+			Name:          "cmn-TW-Neural2-A",
+			Tier:          "Neural2",
+			LanguageCodes: []string{"cmn-TW"},
+			SSMLGender:    "FEMALE",
+		},
+		{
+			Name:          "cmn-CN-Chirp3-HD-Aoede",
+			Tier:          "Chirp 3: HD",
+			LanguageCodes: []string{"cmn-CN"},
+			SSMLGender:    "FEMALE",
+		},
+	}
+}
+
+func GoogleCloudVoiceTier(name string) string {
+	lower := strings.ToLower(strings.TrimSpace(name))
+	switch {
+	case strings.Contains(lower, "chirp3-hd"):
+		return "Chirp 3: HD"
+	case strings.Contains(lower, "neural2"):
+		return "Neural2"
+	case strings.Contains(lower, "wavenet"):
+		return "WaveNet"
+	case strings.Contains(lower, "standard"):
+		return "Standard"
+	default:
+		return ""
+	}
+}
+
+func filterPreferredGoogleCloudVoices(voices []GoogleCloudVoiceOption) []GoogleCloudVoiceOption {
+	filtered := make([]GoogleCloudVoiceOption, 0, len(voices))
+	for _, voice := range voices {
+		switch voice.Tier {
+		case "Chirp 3: HD", "Neural2", "WaveNet":
+			filtered = append(filtered, voice)
+		}
+	}
+	return filtered
+}
+
+func hasVoiceTier(voices []GoogleCloudVoiceOption, tier string) bool {
+	for _, voice := range voices {
+		if voice.Tier == tier {
+			return true
+		}
+	}
+	return false
 }
 
 func (g *GoogleCloudTTS) SynthesizeToMediaSource(ctx context.Context, req BroadcastRequest) (string, error) {
@@ -172,6 +288,12 @@ func (g *GoogleCloudTTS) SynthesizeToMediaSource(ctx context.Context, req Broadc
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("read google cloud tts response: %w", err)
+	}
+	if resp.StatusCode == http.StatusBadRequest && strings.EqualFold(strings.TrimSpace(req.Voice), "cmn-TW-Neural2-A") {
+		fallbackReq := req
+		fallbackReq.Voice = "cmn-TW-Wavenet-A"
+		fallbackReq.Language = "cmn-TW"
+		return g.SynthesizeToMediaSource(ctx, fallbackReq)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return "", fmt.Errorf("google cloud tts returned status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
@@ -212,8 +334,11 @@ func (g *GoogleCloudTTS) buildSynthesizeRequest(req BroadcastRequest) (*googleCl
 		return nil, fmt.Errorf("message is required")
 	}
 
+	voiceName := strings.TrimSpace(req.Voice)
+	isChirp3HD := GoogleCloudVoiceTier(voiceName) == "Chirp 3: HD"
+
 	inputMode := strings.ToLower(strings.TrimSpace(req.InputMode))
-	if inputMode == "" {
+	if inputMode == "" || isChirp3HD {
 		inputMode = "text"
 	}
 
@@ -227,7 +352,10 @@ func (g *GoogleCloudTTS) buildSynthesizeRequest(req BroadcastRequest) (*googleCl
 		return nil, fmt.Errorf("unsupported input_mode: %s", req.InputMode)
 	}
 
-	languageCode := strings.TrimSpace(req.Language)
+	languageCode := deriveLanguageCodeFromVoice(voiceName)
+	if languageCode == "" {
+		languageCode = strings.TrimSpace(req.Language)
+	}
 	if languageCode == "" {
 		languageCode = "cmn-TW"
 	}
@@ -235,18 +363,20 @@ func (g *GoogleCloudTTS) buildSynthesizeRequest(req BroadcastRequest) (*googleCl
 	voice := googleCloudSynthesizeVoice{
 		LanguageCode: languageCode,
 	}
-	if name := strings.TrimSpace(req.Voice); name != "" {
-		voice.Name = name
+	if voiceName != "" {
+		voice.Name = voiceName
 	}
 
 	audioConfig := googleCloudSynthesizeAudioConfig{
 		AudioEncoding: "MP3",
 	}
-	if req.SpeakingRate > 0 {
-		audioConfig.SpeakingRate = req.SpeakingRate
-	}
-	if req.Pitch != 0 {
-		audioConfig.Pitch = req.Pitch
+	if !isChirp3HD {
+		if req.SpeakingRate > 0 {
+			audioConfig.SpeakingRate = req.SpeakingRate
+		}
+		if req.Pitch != 0 {
+			audioConfig.Pitch = req.Pitch
+		}
 	}
 	if req.VolumeGainDB != 0 {
 		audioConfig.VolumeGainDb = req.VolumeGainDB
@@ -319,11 +449,43 @@ func randomToken(byteLen int) string {
 	return hex.EncodeToString(buf)
 }
 
+func deriveLanguageCodeFromVoice(voiceName string) string {
+	parts := strings.Split(strings.TrimSpace(voiceName), "-")
+	if len(parts) < 3 {
+		return ""
+	}
+	return parts[0] + "-" + parts[1]
+}
+
 func sortGoogleCloudVoices(voices []GoogleCloudVoiceOption) {
 	if len(voices) < 2 {
 		return
 	}
+	tierRank := func(tier string) int {
+		switch tier {
+		case "WaveNet":
+			return 0
+		case "Neural2":
+			return 1
+		case "Chirp 3: HD":
+			return 2
+		default:
+			return 3
+		}
+	}
+	localeRank := func(name string) int {
+		if strings.HasPrefix(strings.ToLower(name), "cmn-tw-") {
+			return 0
+		}
+		return 1
+	}
 	sort.Slice(voices, func(i, j int) bool {
+		if localeRank(voices[i].Name) != localeRank(voices[j].Name) {
+			return localeRank(voices[i].Name) < localeRank(voices[j].Name)
+		}
+		if tierRank(voices[i].Tier) != tierRank(voices[j].Tier) {
+			return tierRank(voices[i].Tier) < tierRank(voices[j].Tier)
+		}
 		return strings.ToLower(voices[i].Name) < strings.ToLower(voices[j].Name)
 	})
 }
