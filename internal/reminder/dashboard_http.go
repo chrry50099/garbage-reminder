@@ -422,7 +422,7 @@ var dashboardTemplate = template.Must(template.New("dashboard").Parse(`<!DOCTYPE
         <div class="toolbar">
           <div>
             <h2>ETA 評估（歷史提醒準確度回算）</h2>
-            <div class="helper">依每次實際抵達有謙家園的時間 (`arrival_at`)，自動回算 10 分鐘與 3 分鐘提醒的實際提前量與誤差。</div>
+            <div class="helper">依每次實際抵達有謙家園的時間 (arrival_at)，自動回算 10 分鐘與 3 分鐘提醒的實際提前量與誤差。</div>
           </div>
           <a id="eta-eval-link" class="btn-ghost" href="./api/eta/evaluation" target="_blank" rel="noreferrer">檢視評估 JSON</a>
         </div>
