@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -62,8 +63,11 @@ func TestListBroadcastOptionsFiltersHomePodsAndTTS(t *testing.T) {
 }
 
 func TestSendTestBroadcastGeneratesMediaAndPlaysIt(t *testing.T) {
-	var playRequests []map[string]interface{}
-	var server *httptest.Server
+	var (
+		mu           sync.Mutex
+		playRequests []map[string]interface{}
+		server       *httptest.Server
+	)
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/states":
@@ -89,7 +93,9 @@ func TestSendTestBroadcastGeneratesMediaAndPlaysIt(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 				t.Fatalf("decode request: %v", err)
 			}
+			mu.Lock()
 			playRequests = append(playRequests, payload)
+			mu.Unlock()
 			w.WriteHeader(http.StatusOK)
 		default:
 			t.Fatalf("unexpected path: %s", r.URL.Path)
@@ -110,11 +116,17 @@ func TestSendTestBroadcastGeneratesMediaAndPlaysIt(t *testing.T) {
 	if len(playRequests) != 2 {
 		t.Fatalf("expected 2 play_media requests, got %d", len(playRequests))
 	}
-	if playRequests[0]["entity_id"] != "media_player.zhu_wo" || !strings.Contains(playRequests[0]["media_content_id"].(string), "/api/tts_proxy/test.mp3") {
-		t.Fatalf("unexpected first payload: %+v", playRequests[0])
+	seen := make(map[string]bool)
+	for _, req := range playRequests {
+		entityID, _ := req["entity_id"].(string)
+		mediaID, _ := req["media_content_id"].(string)
+		if !strings.Contains(mediaID, "/api/tts_proxy/test.mp3") {
+			t.Fatalf("unexpected media_content_id: %+v", req)
+		}
+		seen[entityID] = true
 	}
-	if playRequests[1]["entity_id"] != "media_player.ke_ting" {
-		t.Fatalf("unexpected second payload: %+v", playRequests[1])
+	if !seen["media_player.zhu_wo"] || !seen["media_player.ke_ting"] {
+		t.Fatalf("expected both speakers to be played, got: %+v", playRequests)
 	}
 }
 
@@ -292,6 +304,7 @@ func TestSendTestBroadcastFallsBackWhenPrimaryTTSProxyFails(t *testing.T) {
 
 func TestSendMessageSummarizesSpeechPayload(t *testing.T) {
 	var (
+		mu           sync.Mutex
 		playRequests []map[string]interface{}
 		ttsPayload   ttsGetURLRequest
 		webhookHit   bool
@@ -339,7 +352,9 @@ func TestSendMessageSummarizesSpeechPayload(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 				t.Fatalf("decode play_media payload: %v", err)
 			}
+			mu.Lock()
 			playRequests = append(playRequests, payload)
+			mu.Unlock()
 			w.WriteHeader(http.StatusOK)
 		case "/api/webhook/garbage":
 			webhookHit = true
@@ -462,8 +477,11 @@ func TestSendTestBroadcastNormalizesCMNTWToZHTWForGoogleTranslate(t *testing.T) 
 }
 
 func TestSendTestBroadcastContinuesToSecondSpeakerWhenFirstFails(t *testing.T) {
-	var attempted []string
-	var server *httptest.Server
+	var (
+		mu        sync.Mutex
+		attempted = make(map[string]bool)
+		server    *httptest.Server
+	)
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/states":
@@ -486,7 +504,9 @@ func TestSendTestBroadcastContinuesToSecondSpeakerWhenFirstFails(t *testing.T) {
 			var payload map[string]interface{}
 			_ = json.NewDecoder(r.Body).Decode(&payload)
 			entityID := payload["entity_id"].(string)
-			attempted = append(attempted, entityID)
+			mu.Lock()
+			attempted[entityID] = true
+			mu.Unlock()
 			if entityID == "media_player.zhu_wo" {
 				w.WriteHeader(http.StatusInternalServerError)
 				_, _ = w.Write([]byte("speaker unavailable"))
@@ -509,7 +529,7 @@ func TestSendTestBroadcastContinuesToSecondSpeakerWhenFirstFails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected partial broadcast success to return nil, got: %v", err)
 	}
-	if len(attempted) != 2 || attempted[0] != "media_player.zhu_wo" || attempted[1] != "media_player.ke_ting" {
+	if len(attempted) != 2 || !attempted["media_player.zhu_wo"] || !attempted["media_player.ke_ting"] {
 		t.Fatalf("expected both speakers to be attempted, got: %+v", attempted)
 	}
 }

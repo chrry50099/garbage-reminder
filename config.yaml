@@ -1,5 +1,5 @@
 name: "Garbage ETA Predictor"
-version: "1.0.0"
+version: "1.0.1"
 slug: "garbage_eta_predictor"
 description: >-
   Collects garbage truck GPS history, predicts arrival time for 有謙家園,
@@ -42,7 +42,7 @@ options:
   target_point_seq: 27
   target_point_name: "有謙家園"
   target_days: "MON,TUE,THU,FRI,SAT"
-  alert_offsets: "10,3"
+  alert_offsets: "10,3,1"
   collection_start: "19:00"
   collection_end: "21:30"
   history_weeks: 8

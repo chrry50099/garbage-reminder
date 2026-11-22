@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"telegram-garbage-reminder/internal/state"
@@ -526,60 +527,81 @@ func (h *HomeAssistant) sendGoogleCloudBroadcast(ctx context.Context, request Br
 }
 
 func (h *HomeAssistant) playMediaOnTargets(ctx context.Context, targetEntityIDs []string, mediaContentID, engineLabel string) error {
+	targets := make([]string, 0, len(targetEntityIDs))
+	for _, targetEntityID := range targetEntityIDs {
+		targetEntityID = strings.TrimSpace(targetEntityID)
+		if targetEntityID != "" {
+			targets = append(targets, targetEntityID)
+		}
+	}
+	if len(targets) == 0 {
+		return fmt.Errorf("at least one target_entity_id is required")
+	}
+
 	var (
+		wg        sync.WaitGroup
+		mu        sync.Mutex
 		succeeded int
 		failures  []string
 	)
-	for _, targetEntityID := range targetEntityIDs {
-		targetEntityID = strings.TrimSpace(targetEntityID)
-		if targetEntityID == "" {
-			continue
-		}
+	for _, targetEntityID := range targets {
+		wg.Add(1)
+		go func(entityID string) {
+			defer wg.Done()
 
-		payload := map[string]interface{}{
-			"entity_id":          targetEntityID,
-			"media_content_id":   mediaContentID,
-			"media_content_type": "music",
-		}
+			payload := map[string]interface{}{
+				"entity_id":          entityID,
+				"media_content_id":   mediaContentID,
+				"media_content_type": "music",
+			}
 
-		body, err := json.Marshal(payload)
-		if err != nil {
-			failures = append(failures, fmt.Sprintf("%s marshal: %v", targetEntityID, err))
-			continue
-		}
+			body, err := json.Marshal(payload)
+			if err != nil {
+				mu.Lock()
+				failures = append(failures, fmt.Sprintf("%s marshal: %v", entityID, err))
+				mu.Unlock()
+				return
+			}
 
-		endpoint := fmt.Sprintf("%s/api/services/media_player/play_media", h.baseURL)
-		resp, err := h.do(ctx, http.MethodPost, endpoint, body)
-		if err != nil {
-			log.Printf("play_media request failed for %s using %s: %v", targetEntityID, engineLabel, err)
-			failures = append(failures, fmt.Sprintf("%s request: %v", targetEntityID, err))
-			continue
-		}
+			endpoint := fmt.Sprintf("%s/api/services/media_player/play_media", h.baseURL)
+			resp, err := h.do(ctx, http.MethodPost, endpoint, body)
+			if err != nil {
+				log.Printf("play_media request failed for %s using %s: %v", entityID, engineLabel, err)
+				mu.Lock()
+				failures = append(failures, fmt.Sprintf("%s request: %v", entityID, err))
+				mu.Unlock()
+				return
+			}
 
-		respBody, readErr := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if readErr != nil {
-			log.Printf("play_media read response failed for %s using %s: %v", targetEntityID, engineLabel, readErr)
-			failures = append(failures, fmt.Sprintf("%s read: %v", targetEntityID, readErr))
-			continue
-		}
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			log.Printf("play_media failed for %s using %s with status %d: %s", targetEntityID, engineLabel, resp.StatusCode, strings.TrimSpace(string(respBody)))
-			failures = append(failures, fmt.Sprintf("play_media failed for %s using %s with status %d: %s", targetEntityID, engineLabel, resp.StatusCode, strings.TrimSpace(string(respBody))))
-			continue
-		}
+			respBody, readErr := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if readErr != nil {
+				log.Printf("play_media read response failed for %s using %s: %v", entityID, engineLabel, readErr)
+				mu.Lock()
+				failures = append(failures, fmt.Sprintf("%s read: %v", entityID, readErr))
+				mu.Unlock()
+				return
+			}
+			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+				log.Printf("play_media failed for %s using %s with status %d: %s", entityID, engineLabel, resp.StatusCode, strings.TrimSpace(string(respBody)))
+				mu.Lock()
+				failures = append(failures, fmt.Sprintf("play_media failed for %s using %s with status %d: %s", entityID, engineLabel, resp.StatusCode, strings.TrimSpace(string(respBody))))
+				mu.Unlock()
+				return
+			}
 
-		succeeded++
+			mu.Lock()
+			succeeded++
+			mu.Unlock()
+		}(targetEntityID)
 	}
+	wg.Wait()
 
 	if succeeded > 0 {
 		if len(failures) > 0 {
 			log.Printf("Broadcast partially succeeded (%d played, %d failed): %s", succeeded, len(failures), strings.Join(failures, "; "))
 		}
 		return nil
-	}
-	if len(failures) == 0 {
-		return fmt.Errorf("at least one target_entity_id is required")
 	}
 	return fmt.Errorf("%s", strings.Join(failures, "; "))
 }

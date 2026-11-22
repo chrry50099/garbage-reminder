@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.1
+
+- Dispatch `media_player.play_media` concurrently across all selected HomePod mini speakers so both speakers play alerts simultaneously
+- Include the 1-minute arrival threshold (`10,3,1`) in default `alert_offsets`
+
 ## 1.0.0
 
 - Redesign the Home Assistant dashboard into a top persistent live ETA header bar + 3 focused tabs (`📍 即時地圖與今日軌跡`, `🔊 HomePod Mini 測試播報＆一鍵部署`, `📊 歷史資料與 ETA 準確度`)
